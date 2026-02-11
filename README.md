@@ -19,7 +19,7 @@ make build
 make run
 ```
 
-The server starts on `:8080`. No database or config file required -- it'll use sane defaults and skip audit logging if Postgres isn't around.
+The server starts on `:8080`. No database or config file required -- it'll use sane defaults and skip audit logging if Postgres isn't around. You'll see a WARN log if you haven't configured API keys -- that's intentional, it's telling you auth is off.
 
 Try it out:
 
@@ -67,7 +67,7 @@ curl -N -X POST http://localhost:8080/execute/stream \
   -d '{"code": "import time\nfor i in range(5):\n    print(i)\n    time.sleep(0.5)", "language": "python"}'
 ```
 
-You'll see events arrive in real time as the code prints.
+You'll see events arrive in real time as the code prints. Streaming output is capped at 1MB stdout / 256KB stderr, same as the non-streaming endpoint.
 
 ## Running Claude Code in the sandbox
 
@@ -83,9 +83,21 @@ make claude-image
 
 This installs `@anthropic-ai/claude-code` into a `node:20-slim` container. Takes a minute or two.
 
-You'll also need Claude auth. The sandbox passes auth to the container via environment variables -- nothing from `~/.claude/` is mounted. Set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in the server's environment and it'll forward them into the container automatically.
+You'll need Claude auth. Set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in the server's environment. The server writes it to a temp file and mounts it into the container as a secret -- tokens never show up in `docker inspect` or `/proc/*/environ`. Nothing from `~/.claude/` is mounted.
 
 If you're on Claude Max, you can extract your OAuth token with `claude setup-token`, or grab it from the macOS keychain. If you have an API key, just export `ANTHROPIC_API_KEY`.
+
+You also need to tell the server which directories Claude is allowed to mount. Without this, all `work_dir` requests get rejected:
+
+```yaml
+# configs/config.yaml
+sandbox:
+  allowed_workdir_roots:
+    - /home/user/projects
+    - /opt/workspaces
+```
+
+Paths under `/etc`, `/var`, `/root`, and anything containing `.ssh`, `.aws`, `.gnupg`, or `.claude` are always blocked, even if they're under an allowed root. Symlinks are resolved before checking so you can't sneak around the allowlist.
 
 ### Using it
 
@@ -123,13 +135,13 @@ Unlike python/node/bash which run in a completely locked-down box, Claude needs 
 - **Writable workspace** -- the project dir is mounted read-write so Claude can actually edit files.
 - **Runs as UID 1000** instead of nobody, since it needs to write to `~/.claude/` inside the container.
 
-Everything else stays the same: read-only rootfs, all caps dropped, no-new-privileges, seccomp. The sandbox is the security boundary -- Claude runs with `--dangerously-skip-permissions` inside because the container itself is the jail.
+Everything else stays the same: all caps dropped, no-new-privileges, seccomp filtering. The sandbox is the security boundary -- Claude runs with `--dangerously-skip-permissions` inside because the container itself is the jail.
 
 ### Security notes
 
 The Claude runtime is Docker-only (not containerd) because of the network requirements. If you try to run it on the containerd backend, you'll get an error.
 
-Auth is passed via environment variables (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`), not by mounting host config directories. Nothing from your home directory is exposed to the container.
+Auth tokens are passed via a mounted secret file, not environment variables. The server writes the token to a temp file (mode 0400), mounts it at `/run/secrets/auth_token:ro`, and an entrypoint wrapper in the container reads it into the env at startup. The temp file gets cleaned up after execution. This means `docker inspect` on a running container won't show your API key.
 
 The e2e tests include adversarial cases that verify the container blocks things like reading `/etc/shadow`, accessing SSH keys, writing to the rootfs, using `mount()`, `chroot()`, `setuid(0)`, and so on. These are deterministic container security tests, not "ask Claude to be bad" tests.
 
@@ -139,14 +151,16 @@ If you want the audit log and execution history endpoints, spin up a Postgres in
 
 ```bash
 # quick and dirty with docker
-docker run -d --name sandbox-pg -e POSTGRES_USER=sandbox -e POSTGRES_PASSWORD=sandbox -e POSTGRES_DB=sandbox -p 5432:5432 postgres:15
+docker run -d --name sandbox-pg -e POSTGRES_USER=sandbox -e POSTGRES_PASSWORD=sandbox -e POSTGRES_DB=sandbox -p 127.0.0.1:5432:5432 postgres:16
 
 # run the migration
-psql "postgres://sandbox:sandbox@localhost:5432/sandbox?sslmode=disable" -f internal/storage/migrations/001_initial.sql
+psql "postgres://sandbox:sandbox@localhost:5432/sandbox" -f internal/storage/migrations/001_initial.sql
 
 # start the server (it'll pick up the DSN from configs/config.yaml)
 make run
 ```
+
+The database DSN defaults to empty now -- no hardcoded credentials. If you set one with `sslmode=disable`, the server will warn you about it.
 
 ### With Docker Compose
 
@@ -156,21 +170,25 @@ If you want the full stack (server + postgres + prometheus):
 docker-compose -f deployments/docker-compose.yml up
 ```
 
+Postgres is bound to localhost only in the compose file, not exposed to the network.
+
 ## How it works
 
 Code never lives inside the container image. The server writes submitted code to a host temp file, bind-mounts it read-only into a fresh container, runs it, captures output, and tears the container down. The whole lifecycle is managed per-request.
 
-On Linux it tries containerd first (fastest, native cgroup/namespace control). Everywhere else it shells out to `docker run` with equivalent security flags. Both backends enforce the same restrictions.
+On Linux it tries containerd first (fastest, native cgroup/namespace control). Everywhere else it shells out to `docker run` with equivalent security flags. Both backends enforce the same restrictions -- including the same custom seccomp profile (Docker used to fall back to its own permissive default, now it gets our deny-by-default profile written to a temp file).
 
 ### Request flow
 
-1. Request goes through middleware (rate limiting, auth, body size limit, request ID)
-2. Handler validates the request and runs a basic escape-attempt detector (advisory only, doesn't block)
+1. Request goes through middleware (recovery, request ID, logging, security headers, body size limit, rate limiting, metrics, auth)
+2. Handler validates the request and runs the escape-attempt detector -- critical severity patterns get blocked with a 403, lower severities are logged
 3. Backend grabs a concurrency slot, writes code to a temp dir
 4. Container starts with the security profile applied, code mounted read-only at `/workspace`
 5. stdout/stderr captured (or streamed over SSE)
 6. Container killed + cleaned up on completion or timeout
 7. Result optionally logged to Postgres, response sent back
+
+The server also runs an orphan cleanup loop on startup and every 5 minutes -- it finds any `sandbox-*` containers left over from crashes and kills them.
 
 ### Container security
 
@@ -178,10 +196,12 @@ Every container runs with:
 - Read-only root filesystem
 - No network (unless you explicitly enable it, or use the claude runtime)
 - All capabilities dropped
-- Seccomp filtering (deny-by-default on containerd, Docker's default profile elsewhere)
+- Custom seccomp profile (deny-by-default, ~70 syscalls allowed, `prctl` restricted to `PR_SET_NAME`/`PR_GET_NAME`, `memfd_create` removed)
 - PID limit of 50, memory limit of 256MB, no swap
+- Hard CPU cap via CFS quota (not soft shares)
 - Non-root user (nobody/65534)
 - `no-new-privileges` flag
+- PID, network, mount, UTS, IPC, user, and cgroup namespaces all isolated
 - Timeout (default 10s, hard max 60s)
 
 The Claude runtime gets higher limits (1GB RAM, 200 PIDs, 5min timeout) and network access, but keeps all the other restrictions.
@@ -198,7 +218,13 @@ What we defend against:
 - **Network escape** -- network namespace isolated, `--network none`, seccomp blocks socket calls
 - **Filesystem access** -- read-only rootfs, code injected via RO bind mount, no host paths exposed
 - **Process introspection** (ptrace) -- PID namespace, seccomp blocks ptrace
-- **API abuse** -- rate limiting per IP, 1MB body limit, concurrency cap
+- **Fileless execution** -- `memfd_create` removed from seccomp allowlist
+- **Env var injection** -- `LD_PRELOAD`, `PATH`, `HOME`, `NODE_OPTIONS`, `PYTHONPATH` etc blocked
+- **Token theft** -- auth tokens mounted as files, not passed as env vars
+- **WorkDir escape** -- allowlist + symlink resolution + sensitive path blocking
+- **API abuse** -- rate limiting per IP, 1MB body limit, concurrency cap, security headers, request ID validation
+- **SSE injection** -- newlines sanitized in done/error events
+- **Orphan accumulation** -- cleanup loop catches containers that survive crashes
 
 Invariants: no container touches the host filesystem, no container reaches the network (unless opted in), no container affects other containers, no container exhausts host resources, all containers get cleaned up even on panic.
 
@@ -206,7 +232,7 @@ Invariants: no container touches the host filesystem, no container reaches the n
 
 All endpoints return JSON. Errors look like `{"error": "...", "code": "SOME_CODE", "request_id": "uuid"}`.
 
-If you configure API keys in the config, pass them as `X-API-Key` or `Authorization: Bearer <key>`.
+If you configure API keys in the config, pass them as `X-API-Key` or `Authorization: Bearer <key>`. `/health` and `/metrics` don't need auth -- they're for monitoring.
 
 ### POST /execute
 
@@ -277,7 +303,7 @@ List recent executions (needs Postgres). Filter with `?language=python` or `?sta
 
 ### GET /executions/{id}
 
-Full details for one execution.
+Full details for one execution. ID must be a valid UUID.
 
 ### DELETE /executions/{id}
 
@@ -301,14 +327,18 @@ sandbox:
   max_concurrent: 1000
   default_timeout: 10s
   max_timeout: 60s
+  allowed_workdir_roots: []  # must set this for Claude work_dir to work
   default_limits:
     memory_mb: 256
     pids_limit: 50
     disk_mb: 100
 
+database:
+  dsn: ""                # empty = no audit logging, no hardcoded creds
+
 security:
   rate_limit_rps: 100
-  allowed_keys: []       # empty = no auth
+  allowed_keys: []       # empty = no auth (you'll get a warning at startup)
 
 tls:
   enabled: false

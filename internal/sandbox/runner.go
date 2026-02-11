@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
@@ -360,5 +361,15 @@ func truncateOutput(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:maxBytes] + "\n... [output truncated]"
+	// Trim any incomplete UTF-8 rune at the boundary. DecodeLastRuneInString
+	// returns RuneError with size 1 for each invalid trailing byte.
+	t := s[:maxBytes]
+	for len(t) > 0 {
+		r, size := utf8.DecodeLastRuneInString(t)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		t = t[:len(t)-1]
+	}
+	return t + "\n... [output truncated]"
 }

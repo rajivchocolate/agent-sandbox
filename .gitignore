@@ -16,3 +16,12 @@ vendor/
 *~
 
 .DS_Store
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+!deployments/docker/*.crt
+auth_token
+secrets/
+.secrets/

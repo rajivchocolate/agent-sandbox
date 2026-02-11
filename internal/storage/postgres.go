@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -164,5 +165,15 @@ func truncateForDB(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen]
+	// Trim any incomplete UTF-8 rune at the boundary to avoid inserting broken
+	// runes into Postgres.
+	t := s[:maxLen]
+	for len(t) > 0 {
+		r, size := utf8.DecodeLastRuneInString(t)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		t = t[:len(t)-1]
+	}
+	return t
 }

@@ -1,6 +1,6 @@
 # safe-agent-sandbox
 
-Runs untrusted code from AI agents in locked-down containers. Python, Node.js, Bash.
+Runs untrusted code from AI agents in locked-down containers. Python, Node.js, Bash -- and now Claude Code itself.
 
 Works on macOS (Docker Desktop) and Linux (containerd or Docker). Picks the best backend automatically.
 
@@ -69,6 +69,70 @@ curl -N -X POST http://localhost:8080/execute/stream \
 
 You'll see events arrive in real time as the code prints.
 
+## Running Claude Code in the sandbox
+
+This is the interesting part. You can run Claude Code itself inside a sandbox container -- it can do real dev work on your project while being jailed so it can't read your SSH keys, exfiltrate data, or mess with anything outside the project directory.
+
+### Setup
+
+First, build the Claude image:
+
+```bash
+make claude-image
+```
+
+This installs `@anthropic-ai/claude-code` into a `node:20-slim` container. Takes a minute or two.
+
+You'll also need Claude auth. The sandbox passes auth to the container via environment variables -- nothing from `~/.claude/` is mounted. Set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` in the server's environment and it'll forward them into the container automatically.
+
+If you're on Claude Max, you can extract your OAuth token with `claude setup-token`, or grab it from the macOS keychain. If you have an API key, just export `ANTHROPIC_API_KEY`.
+
+### Using it
+
+With the CLI:
+
+```bash
+# point it at your project and give it a prompt
+./bin/sandbox-cli claude "list the files and summarize the project structure" --dir ./my-project
+
+# defaults to current directory if you don't pass --dir
+./bin/sandbox-cli claude "add error handling to the main function"
+```
+
+Or via the API:
+
+```bash
+curl -s -X POST http://localhost:8080/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "find all TODO comments in the codebase and list them",
+    "language": "claude",
+    "work_dir": "/absolute/path/to/project"
+  }'
+```
+
+The `code` field is the prompt. `work_dir` is the project directory that gets mounted into the container at `/workspace`.
+
+### What's different about the Claude runtime
+
+Unlike python/node/bash which run in a completely locked-down box, Claude needs a few things:
+
+- **Network access** -- it has to reach `api.anthropic.com`. The container gets `--network bridge` instead of `--network none`. This does mean it can reach the broader internet, which is a known tradeoff. If that bothers you, set up a firewall rule or network policy to restrict egress.
+- **Higher resource limits** -- 1GB RAM, 200 PIDs, 500MB disk, 2 CPUs (vs 256MB/50 PIDs/100MB for code runtimes). Claude spawns subprocesses to do its work.
+- **Longer timeout** -- 5 minutes instead of 10 seconds. Real dev tasks take time.
+- **Writable workspace** -- the project dir is mounted read-write so Claude can actually edit files.
+- **Runs as UID 1000** instead of nobody, since it needs to write to `~/.claude/` inside the container.
+
+Everything else stays the same: read-only rootfs, all caps dropped, no-new-privileges, seccomp. The sandbox is the security boundary -- Claude runs with `--dangerously-skip-permissions` inside because the container itself is the jail.
+
+### Security notes
+
+The Claude runtime is Docker-only (not containerd) because of the network requirements. If you try to run it on the containerd backend, you'll get an error.
+
+Auth is passed via environment variables (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`), not by mounting host config directories. Nothing from your home directory is exposed to the container.
+
+The e2e tests include adversarial cases that verify the container blocks things like reading `/etc/shadow`, accessing SSH keys, writing to the rootfs, using `mount()`, `chroot()`, `setuid(0)`, and so on. These are deterministic container security tests, not "ask Claude to be bad" tests.
+
 ### With Postgres (optional)
 
 If you want the audit log and execution history endpoints, spin up a Postgres instance and point the config at it:
@@ -112,13 +176,15 @@ On Linux it tries containerd first (fastest, native cgroup/namespace control). E
 
 Every container runs with:
 - Read-only root filesystem
-- No network (unless you explicitly enable it)
+- No network (unless you explicitly enable it, or use the claude runtime)
 - All capabilities dropped
 - Seccomp filtering (deny-by-default on containerd, Docker's default profile elsewhere)
 - PID limit of 50, memory limit of 256MB, no swap
 - Non-root user (nobody/65534)
 - `no-new-privileges` flag
 - Timeout (default 10s, hard max 60s)
+
+The Claude runtime gets higher limits (1GB RAM, 200 PIDs, 5min timeout) and network access, but keeps all the other restrictions.
 
 The idea is defense in depth. Even if one layer fails, the others should hold.
 
@@ -162,7 +228,17 @@ Run code and get the result back.
 }
 ```
 
-`language` is required (`python`, `node`, `bash`). `code` is required (max 1MB). Everything else has defaults.
+`language` is required (`python`, `node`, `bash`, `claude`). `code` is required (max 1MB). Everything else has defaults.
+
+For Claude, `code` is the prompt and you probably want to pass `work_dir` too:
+
+```json
+{
+  "code": "refactor the auth module to use JWT",
+  "language": "claude",
+  "work_dir": "/path/to/project"
+}
+```
 
 Response:
 
@@ -251,6 +327,7 @@ You can also set `CONFIG_PATH` env var to point to a different config file, or `
 | python | python:3.12-slim | `python3 -u -B <file>` |
 | node | node:20-slim | `node --max-old-space-size=256 <file>` |
 | bash | alpine:3.19 | `/bin/sh -e -u <file>` |
+| claude | sandbox-claude:latest | `claude -p --dangerously-skip-permissions` |
 
 Adding a new runtime means adding a file in `internal/runtime/` that implements the `Runtime` interface and registering it in the registry.
 
@@ -261,6 +338,7 @@ make build          # build server + cli
 make test           # all tests
 make test-unit      # unit tests only (no docker needed)
 make test-e2e       # e2e security tests (needs docker)
+make claude-image   # build the claude sandbox image
 make lint           # golangci-lint
 make security-scan  # gosec
 make vulncheck      # govulncheck (dependency CVEs)
@@ -268,7 +346,7 @@ make ci             # run everything CI runs (build, vet, tests, security, lint)
 make setup          # install dev tools (gosec, govulncheck, golangci-lint, gofumpt)
 ```
 
-`make ci` mirrors the GitHub Actions pipeline exactly, so if it passes locally it'll pass in CI. The e2e tests spin up real containers and try escape attempts (fork bombs, filesystem writes, network access) to make sure the sandbox holds.
+`make ci` mirrors the GitHub Actions pipeline exactly, so if it passes locally it'll pass in CI. The e2e tests spin up real containers and try escape attempts (fork bombs, filesystem writes, network access, mount syscalls, chroot, setuid) to make sure the sandbox holds.
 
 ## Project layout
 

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,13 +33,14 @@ type ServerConfig struct {
 }
 
 type SandboxConfig struct {
-	ContainerdSocket string        `yaml:"containerd_socket"`
-	Namespace        string        `yaml:"namespace"`
-	DefaultTimeout   time.Duration `yaml:"default_timeout"`
-	MaxTimeout       time.Duration `yaml:"max_timeout"`
-	MaxConcurrent    int           `yaml:"max_concurrent"`
-	DefaultLimits    DefaultLimits `yaml:"default_limits"`
-	Backend          string        `yaml:"backend"` // "auto" (default), "containerd", or "docker"
+	ContainerdSocket    string        `yaml:"containerd_socket"`
+	Namespace           string        `yaml:"namespace"`
+	DefaultTimeout      time.Duration `yaml:"default_timeout"`
+	MaxTimeout          time.Duration `yaml:"max_timeout"`
+	MaxConcurrent       int           `yaml:"max_concurrent"`
+	DefaultLimits       DefaultLimits `yaml:"default_limits"`
+	Backend             string        `yaml:"backend"`              // "auto" (default), "containerd", or "docker"
+	AllowedWorkdirRoots []string      `yaml:"allowed_workdir_roots"` // Absolute paths that WorkDir must be under; empty blocks all WorkDir mounts
 }
 
 type DefaultLimits struct {
@@ -134,7 +137,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		Database: DatabaseConfig{
-			DSN:             "postgres://sandbox:sandbox@localhost:5432/sandbox?sslmode=disable",
+			DSN:             "",
 			MaxOpenConns:    25,
 			MaxIdleConns:    5,
 			ConnMaxLifetime: 5 * time.Minute,
@@ -184,6 +187,14 @@ func (c *Config) Validate() error {
 		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
 			return fmt.Errorf("tls.cert_file and tls.key_file are required when TLS is enabled")
 		}
+	}
+	for _, root := range c.Sandbox.AllowedWorkdirRoots {
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("sandbox.allowed_workdir_roots: %q must be an absolute path", root)
+		}
+	}
+	if c.Database.DSN != "" && strings.Contains(c.Database.DSN, "sslmode=disable") {
+		log.Warn().Msg("database DSN has sslmode=disable — connections to Postgres are unencrypted")
 	}
 	return nil
 }

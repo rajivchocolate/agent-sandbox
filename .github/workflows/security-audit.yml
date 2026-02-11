@@ -1,0 +1,34 @@
+name: Security Audit
+
+on:
+  schedule:
+    # Every Monday at 9am UTC — catches weekend Go releases
+    - cron: "0 9 * * 1"
+  workflow_dispatch: # manual trigger for on-demand audits
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GO_VERSION: "1.24"
+
+jobs:
+  full-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install security tools
+        run: make setup
+
+      - name: Strict vulnerability check (all vulns including stdlib)
+        run: make vulncheck-strict
+
+      - name: Security scan (gosec)
+        run: make security-scan

@@ -74,8 +74,12 @@ vet:
 security-scan:
 	gosec -exclude-generated -exclude=G302 ./...
 
-## vulncheck: Check for known vulnerabilities in dependencies
+## vulncheck: Check for vulnerabilities (stdlib=advisory, deps=blocking)
 vulncheck:
+	@./scripts/vulncheck.sh
+
+## vulncheck-strict: Fail on ALL vulnerabilities including stdlib (for audits)
+vulncheck-strict:
 	govulncheck ./...
 
 ## claude-image: Build the Claude Code sandbox Docker image

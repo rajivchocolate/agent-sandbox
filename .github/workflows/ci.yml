@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GO_VERSION: "1.24"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Download dependencies
@@ -37,7 +40,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Unit tests
@@ -51,7 +54,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Pull runtime images
@@ -74,16 +77,16 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Install security tools
         run: make setup
 
-      - name: Security scan
+      - name: Security scan (gosec)
         run: make security-scan
 
-      - name: Check for vulnerabilities
+      - name: Vulnerability check (deps=blocking, stdlib=advisory)
         run: make vulncheck
 
   lint:
@@ -94,7 +97,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: golangci-lint

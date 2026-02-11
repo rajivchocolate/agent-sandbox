@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Go modules — bumps go.mod dependencies
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - go
+    groups:
+      # Batch minor/patch updates to reduce PR noise
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions — keep CI actions up to date
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - ci

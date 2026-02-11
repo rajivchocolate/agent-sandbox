@@ -102,6 +102,37 @@ func TestAuthProxy_HeaderInjection(t *testing.T) {
 	}
 }
 
+func TestAuthProxy_RateLimitExceeded(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	target, _ := url.Parse(upstream.URL)
+	rp := httputil.NewSingleHostReverseProxy(target)
+
+	ap := &AuthProxy{token: "tok", secret: "", maxRPM: 3}
+	handler := ap.handleProxy(rp)
+
+	// Send maxRPM requests — all should succeed.
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: got status %d, want 200", i, rec.Code)
+		}
+	}
+
+	// Next request should be rate-limited.
+	req := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("got status %d, want 429 after exceeding RPM limit", rec.Code)
+	}
+}
+
 func TestAuthProxy_StartAndClose(t *testing.T) {
 	// Find a free port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

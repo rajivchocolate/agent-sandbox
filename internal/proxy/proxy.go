@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,10 +18,13 @@ const anthropicHost = "api.anthropic.com"
 // forwarding requests to api.anthropic.com. It runs on the host so that
 // containers never need the token at all.
 type AuthProxy struct {
-	server *http.Server
-	token  string
-	secret string // shared secret containers must present to use the proxy
-	addr   string
+	server      *http.Server
+	token       string
+	secret      string // shared secret containers must present to use the proxy
+	addr        string
+	maxRPM      int           // global requests-per-minute cap (0 = unlimited)
+	windowCount atomic.Int64  // requests in current window
+	windowStart atomic.Int64  // unix seconds of current window start
 }
 
 // New creates an AuthProxy that will listen on the given port and inject
@@ -29,11 +33,18 @@ type AuthProxy struct {
 // header value (this is what Claude Code sends when ANTHROPIC_API_KEY is set
 // to the proxy secret inside the container).
 func New(port int, token, secret string) *AuthProxy {
+	return NewWithRPM(port, token, secret, 0)
+}
+
+// NewWithRPM creates an AuthProxy with a global requests-per-minute cap.
+// maxRPM of 0 means unlimited.
+func NewWithRPM(port int, token, secret string, maxRPM int) *AuthProxy {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	ap := &AuthProxy{
 		token:  token,
 		secret: secret,
 		addr:   addr,
+		maxRPM: maxRPM,
 	}
 
 	target := &url.URL{Scheme: "https", Host: anthropicHost}
@@ -62,7 +73,7 @@ func New(port int, token, secret string) *AuthProxy {
 	return ap
 }
 
-// handleProxy validates the shared secret before forwarding to the reverse proxy.
+// handleProxy validates the shared secret and RPM limit before forwarding.
 func (ap *AuthProxy) handleProxy(rp *httputil.ReverseProxy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ap.secret != "" {
@@ -72,8 +83,27 @@ func (ap *AuthProxy) handleProxy(rp *httputil.ReverseProxy) http.HandlerFunc {
 				return
 			}
 		}
+		if ap.maxRPM > 0 && !ap.allowRequest() {
+			http.Error(w, `{"error":"proxy rate limit exceeded","code":"PROXY_RATE_LIMITED"}`, http.StatusTooManyRequests)
+			return
+		}
 		rp.ServeHTTP(w, r)
 	}
+}
+
+// allowRequest implements a sliding-window RPM counter. Returns true if the
+// request should be allowed.
+func (ap *AuthProxy) allowRequest() bool {
+	now := time.Now().Unix()
+	windowStart := ap.windowStart.Load()
+	if now-windowStart >= 60 {
+		// New window — reset. Race is benign: worst case we allow a few extra.
+		ap.windowStart.Store(now)
+		ap.windowCount.Store(1)
+		return true
+	}
+	count := ap.windowCount.Add(1)
+	return count <= int64(ap.maxRPM)
 }
 
 // Start begins listening. It returns an error if the bind fails.

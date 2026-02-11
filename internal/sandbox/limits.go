@@ -22,18 +22,29 @@ func DefaultLimits() ResourceLimits {
 	}
 }
 
+// DevLimits returns resource limits suitable for Claude / dev-tier workloads
+// that need more headroom than the default code-execution sandbox.
+func DevLimits() ResourceLimits {
+	return ResourceLimits{
+		CPUShares: 4096, // 4 cores
+		MemoryMB:  4096, // 4 GB
+		PidsLimit: 500,
+		DiskMB:    2048, // 2 GB tmpfs
+	}
+}
+
 func (rl ResourceLimits) Validate() error {
-	if rl.CPUShares < 2 || rl.CPUShares > 4096 {
-		return fmt.Errorf("%w: cpu_shares must be 2-4096, got %d", ErrInvalidRequest, rl.CPUShares)
+	if rl.CPUShares < 2 || rl.CPUShares > 8192 {
+		return fmt.Errorf("%w: cpu_shares must be 2-8192, got %d", ErrInvalidRequest, rl.CPUShares)
 	}
-	if rl.MemoryMB < 16 || rl.MemoryMB > 2048 {
-		return fmt.Errorf("%w: memory_mb must be 16-2048, got %d", ErrInvalidRequest, rl.MemoryMB)
+	if rl.MemoryMB < 16 || rl.MemoryMB > 16384 {
+		return fmt.Errorf("%w: memory_mb must be 16-16384, got %d", ErrInvalidRequest, rl.MemoryMB)
 	}
-	if rl.PidsLimit < 5 || rl.PidsLimit > 500 {
-		return fmt.Errorf("%w: pids_limit must be 5-500, got %d", ErrInvalidRequest, rl.PidsLimit)
+	if rl.PidsLimit < 5 || rl.PidsLimit > 2000 {
+		return fmt.Errorf("%w: pids_limit must be 5-2000, got %d", ErrInvalidRequest, rl.PidsLimit)
 	}
-	if rl.DiskMB < 1 || rl.DiskMB > 1024 {
-		return fmt.Errorf("%w: disk_mb must be 1-1024, got %d", ErrInvalidRequest, rl.DiskMB)
+	if rl.DiskMB < 1 || rl.DiskMB > 10240 {
+		return fmt.Errorf("%w: disk_mb must be 1-10240, got %d", ErrInvalidRequest, rl.DiskMB)
 	}
 	return nil
 }

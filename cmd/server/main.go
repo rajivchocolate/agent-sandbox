@@ -89,7 +89,7 @@ func main() {
 		proxySecret := hex.EncodeToString(secretBytes)
 		cfg.AuthProxy.Secret = proxySecret
 
-		proxy = authproxy.New(cfg.AuthProxy.Port, token, proxySecret)
+		proxy = authproxy.NewWithRPM(cfg.AuthProxy.Port, token, proxySecret, cfg.AuthProxy.MaxProxyRPM)
 		if err := proxy.Start(); err != nil {
 			log.Fatal().Err(err).Int("port", cfg.AuthProxy.Port).Msg("failed to start auth proxy")
 		}

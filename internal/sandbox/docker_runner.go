@@ -44,6 +44,7 @@ var sensitiveHomeDirs = []string{".ssh", ".aws", ".gnupg", ".claude"}
 type DockerRunner struct {
 	runtimes      *runtime.Registry
 	sem           chan struct{}
+	claudeSem     chan struct{} // separate concurrency limit for claude sessions
 	active        atomic.Int64
 	wg            sync.WaitGroup
 	mu            sync.Mutex
@@ -55,13 +56,17 @@ type DockerRunner struct {
 	cancelCleanup context.CancelFunc
 }
 
-func NewDockerRunner(maxConcurrent int, allowedRoots []string, proxyPort int, proxySecret string) *DockerRunner {
+func NewDockerRunner(maxConcurrent int, allowedRoots []string, proxyPort int, proxySecret string, maxConcurrentClaude int) *DockerRunner {
 	if maxConcurrent < 1 {
 		maxConcurrent = 100
+	}
+	if maxConcurrentClaude < 1 {
+		maxConcurrentClaude = 5
 	}
 	d := &DockerRunner{
 		runtimes:     runtime.NewRegistry(),
 		sem:          make(chan struct{}, maxConcurrent),
+		claudeSem:    make(chan struct{}, maxConcurrentClaude),
 		dockerHost:   resolveDockerHost(),
 		allowedRoots: allowedRoots,
 		proxyPort:    proxyPort,
@@ -163,6 +168,16 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 		return nil, &ExecutionError{ExecID: execID, Op: "acquire_slot", Err: ctx.Err()}
 	}
 
+	// Claude sessions have a separate, tighter concurrency limit.
+	if req.Language == "claude" {
+		select {
+		case d.claudeSem <- struct{}{}:
+			defer func() { <-d.claudeSem }()
+		case <-ctx.Done():
+			return nil, &ExecutionError{ExecID: execID, Op: "acquire_claude_slot", Err: ctx.Err()}
+		}
+	}
+
 	d.wg.Add(1)
 	defer d.wg.Done()
 	d.active.Add(1)
@@ -171,7 +186,7 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	timeout := req.Timeout
 	if timeout == 0 {
 		if req.Language == "claude" {
-			timeout = 5 * time.Minute
+			timeout = 30 * time.Minute
 		} else {
 			timeout = 10 * time.Second
 		}
@@ -318,7 +333,7 @@ func (d *DockerRunner) buildDockerArgs(
 	limits := req.Limits
 	if limits == (ResourceLimits{}) {
 		if isClaude {
-			limits = claudeDefaultLimits()
+			limits = DevLimits()
 		} else {
 			limits = DefaultLimits()
 		}
@@ -399,15 +414,6 @@ func (d *DockerRunner) buildDockerArgs(
 	return args
 }
 
-func claudeDefaultLimits() ResourceLimits {
-	return ResourceLimits{
-		CPUShares: 2048,
-		MemoryMB:  1024,
-		PidsLimit: 200,
-		DiskMB:    500,
-	}
-}
-
 func (d *DockerRunner) validateRequest(req *ExecutionRequest) error {
 	if req.Code == "" {
 		return fmt.Errorf("%w: code is empty", ErrInvalidRequest)
@@ -420,7 +426,7 @@ func (d *DockerRunner) validateRequest(req *ExecutionRequest) error {
 	}
 	maxTimeout := 60 * time.Second
 	if req.Language == "claude" {
-		maxTimeout = 5 * time.Minute
+		maxTimeout = 30 * time.Minute
 	}
 	if req.Timeout > maxTimeout {
 		return fmt.Errorf("%w: timeout exceeds %s maximum", ErrInvalidRequest, maxTimeout)

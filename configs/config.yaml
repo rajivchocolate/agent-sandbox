@@ -2,7 +2,7 @@ server:
   host: "0.0.0.0"
   port: 8080
   read_timeout: 30s
-  write_timeout: 65s
+  write_timeout: 31m  # > max claude timeout (30min) + overhead
   shutdown_timeout: 30s
   max_request_body_bytes: 1048576  # 1MB
 
@@ -36,9 +36,11 @@ tracing:
 
 security:
   api_key_header: "X-API-Key"
-  allowed_keys: []  # Empty = no auth required
+  allowed_keys: []  # Add API keys here for production; empty + allow_unauthenticated=false rejects all
+  allow_unauthenticated: true  # Set to false in production after configuring allowed_keys
   rate_limit_rps: 100
   rate_limit_burst: 200
+  max_concurrent_claude: 5  # Max concurrent claude sessions
   seccomp_profile: "configs/seccomp-default.json"
 
 pool:
@@ -55,3 +57,4 @@ tls:
 
 auth_proxy:
   port: 0  # 0 = disabled, set to 8081 to enable
+  max_proxy_rpm: 300  # Global requests-per-minute cap on Anthropic API proxy (0 = unlimited)

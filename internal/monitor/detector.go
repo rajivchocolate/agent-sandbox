@@ -135,7 +135,7 @@ func defaultPatterns() []DetectionPattern {
 		{
 			Name:        "host_mount_access",
 			Description: "Attempting to access host mounts",
-			Regex:       regexp.MustCompile(`/host|/var/run/docker|/var/run/containerd`),
+			Regex:       regexp.MustCompile(`/var/run/docker|/var/run/containerd`),
 			Severity:    SeverityCritical,
 		},
 		{

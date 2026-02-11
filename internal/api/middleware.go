@@ -1,12 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,7 +86,7 @@ func (sr *statusRecorder) WriteHeader(code int) {
 	sr.ResponseWriter.WriteHeader(code)
 }
 
-func AuthMiddleware(allowedKeys []string) func(http.Handler) http.Handler {
+func AuthMiddleware(allowedKeys []string, allowUnauthenticated bool) func(http.Handler) http.Handler {
 	keySet := make(map[string]struct{}, len(allowedKeys))
 	for _, k := range allowedKeys {
 		if k == "" {
@@ -94,7 +98,11 @@ func AuthMiddleware(allowedKeys []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if len(keySet) == 0 {
-				next.ServeHTTP(w, r)
+				if allowUnauthenticated {
+					next.ServeHTTP(w, r)
+					return
+				}
+				http.Error(w, `{"error":"unauthorized","code":"AUTH_REQUIRED"}`, http.StatusUnauthorized)
 				return
 			}
 
@@ -103,7 +111,7 @@ func AuthMiddleware(allowedKeys []string) func(http.Handler) http.Handler {
 				key = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			}
 
-			if key == "" || keySet == nil {
+			if key == "" {
 				http.Error(w, `{"error":"unauthorized","code":"AUTH_REQUIRED"}`, http.StatusUnauthorized)
 				return
 			}
@@ -198,6 +206,54 @@ func RateLimitMiddleware(rps float64, burst int) func(http.Handler) http.Handler
 
 			v.tokens--
 			mu.Unlock()
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// ConcurrentClaudeMiddleware tracks concurrent claude executions and rejects
+// new ones when the limit is reached. It inspects the JSON body for
+// "language":"claude" without consuming it.
+func ConcurrentClaudeMiddleware(maxConcurrent int) func(http.Handler) http.Handler {
+	var active atomic.Int64
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Only applies to execution endpoints.
+			if r.URL.Path != "/execute" && r.URL.Path != "/execute/stream" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Peek at the body to see if this is a claude request.
+			body, err := io.ReadAll(r.Body)
+			r.Body.Close()
+			if err != nil {
+				http.Error(w, `{"error":"failed to read body","code":"INVALID_REQUEST"}`, http.StatusBadRequest)
+				return
+			}
+			// Restore the body for downstream handlers.
+			r.Body = io.NopCloser(bytes.NewReader(body))
+
+			// Quick check: does the body contain "claude" as the language?
+			var partial struct {
+				Language string `json:"language"`
+			}
+			if json.Unmarshal(body, &partial) == nil && partial.Language == "claude" {
+				// CAS loop to avoid TOCTOU between Load and Add.
+				for {
+					cur := active.Load()
+					if cur >= int64(maxConcurrent) {
+						http.Error(w, `{"error":"too many concurrent claude sessions","code":"CLAUDE_LIMIT_REACHED"}`, http.StatusTooManyRequests)
+						return
+					}
+					if active.CompareAndSwap(cur, cur+1) {
+						break
+					}
+				}
+				defer active.Add(-1)
+			}
 
 			next.ServeHTTP(w, r)
 		})

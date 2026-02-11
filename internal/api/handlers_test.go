@@ -64,7 +64,9 @@ func TestHandleExecute_EscapeDetection(t *testing.T) {
 		t.Errorf("got status %d, want 403", rec.Code)
 	}
 	var resp ErrorResponse
-	json.NewDecoder(rec.Body).Decode(&resp)
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp.Code != "SECURITY_BLOCKED" {
 		t.Errorf("got code %q, want SECURITY_BLOCKED", resp.Code)
 	}
@@ -156,7 +158,9 @@ func TestHandleExecute_BackendUnavailable(t *testing.T) {
 		t.Errorf("got status %d, want 503", rec.Code)
 	}
 	var resp ErrorResponse
-	json.NewDecoder(rec.Body).Decode(&resp)
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp.Code != "RUNNER_UNAVAILABLE" {
 		t.Errorf("got code %q, want RUNNER_UNAVAILABLE", resp.Code)
 	}

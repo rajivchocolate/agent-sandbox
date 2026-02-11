@@ -14,11 +14,11 @@ func TestDefaultProfile_DenyByDefault(t *testing.T) {
 	}
 }
 
-func TestDefaultProfile_MemfdCreateBlocked(t *testing.T) {
+func TestDefaultProfile_MemfdCreateAllowed(t *testing.T) {
 	p := DefaultProfile()
 	found := false
 	for _, rule := range p.Syscalls {
-		if rule.Action == specs.ActTrap {
+		if rule.Action == specs.ActAllow {
 			for _, name := range rule.Names {
 				if name == "memfd_create" {
 					found = true
@@ -31,7 +31,7 @@ func TestDefaultProfile_MemfdCreateBlocked(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("memfd_create should be trapped in default profile")
+		t.Error("memfd_create should be allowed in default profile")
 	}
 }
 

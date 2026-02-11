@@ -14,6 +14,7 @@ func newTestRunner(proxyPort int, proxySecret string, allowedRoots []string) *Do
 	return &DockerRunner{
 		runtimes:     runtime.NewRegistry(),
 		sem:          make(chan struct{}, 10),
+		claudeSem:    make(chan struct{}, 5),
 		proxyPort:    proxyPort,
 		proxySecret:  proxySecret,
 		allowedRoots: allowedRoots,
@@ -170,7 +171,7 @@ func TestValidateRequest(t *testing.T) {
 		},
 		{
 			"timeout > max for claude",
-			ExecutionRequest{Language: "claude", Code: "hello", Timeout: 10 * time.Minute},
+			ExecutionRequest{Language: "claude", Code: "hello", Timeout: 31 * time.Minute},
 			true,
 		},
 		{
@@ -208,5 +209,65 @@ func TestValidateRequest(t *testing.T) {
 				t.Errorf("validateRequest() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestBuildDockerArgs_ClaudeDevLimits(t *testing.T) {
+	d := newTestRunner(0, "", nil)
+	rt, _ := d.runtimes.Get("claude")
+
+	args := d.buildDockerArgs("exec-dev", rt,
+		"/tmp/prompt.txt", "/tmp/prompt.txt",
+		"/tmp/sandbox-exec-dev", "/tmp/seccomp.json",
+		ExecutionRequest{Language: "claude", Code: "hello"},
+	)
+
+	// DevLimits(): 4096 MB memory
+	if !argsContain(args, "4096m") {
+		t.Error("expected --memory 4096m for claude dev limits")
+	}
+	// DevLimits(): 500 PIDs
+	if !argsContain(args, "500") {
+		t.Error("expected --pids-limit 500 for claude dev limits")
+	}
+}
+
+func TestDockerRunner_ClaudeConcurrencyLimit(t *testing.T) {
+	d := &DockerRunner{
+		runtimes:  runtime.NewRegistry(),
+		sem:       make(chan struct{}, 100),
+		claudeSem: make(chan struct{}, 2),
+	}
+
+	// Fill claude semaphore
+	d.claudeSem <- struct{}{}
+	d.claudeSem <- struct{}{}
+
+	// Verify main sem still has capacity
+	select {
+	case d.sem <- struct{}{}:
+		<-d.sem // release
+	default:
+		t.Error("main semaphore should have capacity")
+	}
+
+	// Verify claude sem is full
+	select {
+	case d.claudeSem <- struct{}{}:
+		<-d.claudeSem
+		t.Error("claude semaphore should be full")
+	default:
+		// expected
+	}
+
+	// Release one slot
+	<-d.claudeSem
+
+	// Now should have capacity
+	select {
+	case d.claudeSem <- struct{}{}:
+		<-d.claudeSem
+	default:
+		t.Error("claude semaphore should have capacity after release")
 	}
 }

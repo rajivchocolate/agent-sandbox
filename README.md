@@ -130,8 +130,8 @@ The `code` field is the prompt. `work_dir` is the project directory that gets mo
 Unlike python/node/bash which run in a completely locked-down box, Claude needs a few things:
 
 - **Network access** -- it has to reach `api.anthropic.com`. The container gets `--network bridge` instead of `--network none`. This does mean it can reach the broader internet, which is a known tradeoff. If that bothers you, set up a firewall rule or network policy to restrict egress.
-- **Higher resource limits** -- 1GB RAM, 200 PIDs, 500MB disk, 2 CPUs (vs 256MB/50 PIDs/100MB for code runtimes). Claude spawns subprocesses to do its work.
-- **Longer timeout** -- 5 minutes instead of 10 seconds. Real dev tasks take time.
+- **Higher resource limits** -- 4GB RAM, 500 PIDs, 2GB disk, 4 CPUs (vs 256MB/50 PIDs/100MB for code runtimes). Claude spawns subprocesses to do its work.
+- **Longer timeout** -- 30 minutes instead of 10 seconds. Real dev tasks take time.
 - **Writable workspace** -- the project dir is mounted read-write so Claude can actually edit files.
 - **Runs as UID 1000** instead of nobody, since it needs to write to `~/.claude/` inside the container.
 
@@ -215,7 +215,7 @@ Every container runs with:
 - Read-only root filesystem
 - No network (unless you explicitly enable it, or use the claude runtime)
 - All capabilities dropped
-- Custom seccomp profile (deny-by-default, ~70 syscalls allowed, `prctl` restricted to `PR_SET_NAME`/`PR_GET_NAME`, `memfd_create` removed)
+- Custom seccomp profile (deny-by-default, ~70 syscalls allowed, `prctl` restricted to `PR_SET_NAME`/`PR_GET_NAME`, `memfd_create` allowed for V8/Go JIT)
 - PID limit of 50, memory limit of 256MB, no swap
 - Hard CPU cap via CFS quota (not soft shares)
 - Non-root user (nobody/65534)
@@ -223,7 +223,7 @@ Every container runs with:
 - PID, network, mount, UTS, IPC, user, and cgroup namespaces all isolated
 - Timeout (default 10s, hard max 60s)
 
-The Claude runtime gets higher limits (1GB RAM, 200 PIDs, 5min timeout) and network access, but keeps all the other restrictions.
+The Claude runtime gets higher limits (4GB RAM, 500 PIDs, 30min timeout) and network access, but keeps all the other restrictions.
 
 The idea is defense in depth. Even if one layer fails, the others should hold.
 
@@ -237,7 +237,7 @@ What we defend against:
 - **Network escape** -- network namespace isolated, `--network none`, seccomp blocks socket calls
 - **Filesystem access** -- read-only rootfs, code injected via RO bind mount, no host paths exposed
 - **Process introspection** (ptrace) -- PID namespace, seccomp blocks ptrace
-- **Fileless execution** -- `memfd_create` removed from seccomp allowlist
+- **Fileless execution** -- `memfd_create` allowed (needed by V8/Go JIT) but mitigated by `--cap-drop ALL`, PID namespace, masked `/proc/self/fd`
 - **Env var injection** -- `LD_PRELOAD`, `PATH`, `HOME`, `NODE_OPTIONS`, `PYTHONPATH` etc blocked
 - **Token theft** -- auth tokens mounted as files, not passed as env vars
 - **WorkDir escape** -- allowlist + symlink resolution + sensitive path blocking
@@ -376,6 +376,7 @@ You can also set `CONFIG_PATH` env var to point to a different config file, or `
 | python | python:3.12-slim | `python3 -u -B <file>` |
 | node | node:20-slim | `node --max-old-space-size=256 <file>` |
 | bash | alpine:3.19 | `/bin/sh -e -u <file>` |
+| go | golang:1.24-alpine | `go run <file>` |
 | claude | sandbox-claude:latest | `claude -p --dangerously-skip-permissions` |
 
 Adding a new runtime means adding a file in `internal/runtime/` that implements the `Runtime` interface and registering it in the registry.

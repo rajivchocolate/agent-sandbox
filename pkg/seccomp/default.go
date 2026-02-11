@@ -78,6 +78,7 @@ func baseSyscalls(b *ProfileBuilder) *ProfileBuilder {
 			"statfs", "fstatfs",
 			"statx",
 			"copy_file_range",
+			"memfd_create", // V8 and Go runtime use this for JIT/memory on modern kernels
 		).
 		// prctl restricted to PR_SET_NAME (15) and PR_GET_NAME (16) only
 		AllowSyscallWithArgs("prctl", []SyscallArg{
@@ -98,7 +99,6 @@ func dangerousSyscalls(b *ProfileBuilder) *ProfileBuilder {
 			"bpf",
 			"perf_event_open",
 			"userfaultfd",
-			"memfd_create", // fileless execution: anonymous in-memory files executable via /proc/self/fd
 			"kexec_load", "kexec_file_load",
 			"finit_module", "init_module", "delete_module",
 		).

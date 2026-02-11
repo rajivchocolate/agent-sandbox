@@ -27,8 +27,9 @@ type Config struct {
 // AuthProxyConfig controls the host-side reverse proxy that injects API
 // tokens so they never enter containers.
 type AuthProxyConfig struct {
-	Port   int    `yaml:"port"`   // 0 = disabled (default), >0 = listen on this port
-	Secret string `yaml:"-"`      // Generated at runtime, not from config file
+	Port         int    `yaml:"port"`           // 0 = disabled (default), >0 = listen on this port
+	Secret       string `yaml:"-"`              // Generated at runtime, not from config file
+	MaxProxyRPM  int    `yaml:"max_proxy_rpm"`  // global requests-per-minute cap (default 300, 0 = unlimited)
 }
 
 type ServerConfig struct {
@@ -77,11 +78,13 @@ type TracingConfig struct {
 }
 
 type SecurityConfig struct {
-	APIKeyHeader   string   `yaml:"api_key_header"`
-	AllowedKeys    []string `yaml:"allowed_keys"`
-	RateLimitRPS   float64  `yaml:"rate_limit_rps"`
-	RateLimitBurst int      `yaml:"rate_limit_burst"`
-	SeccompProfile string   `yaml:"seccomp_profile"`
+	APIKeyHeader         string   `yaml:"api_key_header"`
+	AllowedKeys          []string `yaml:"allowed_keys"`
+	AllowUnauthenticated bool     `yaml:"allow_unauthenticated"` // must be explicitly true to bypass auth when AllowedKeys is empty
+	RateLimitRPS         float64  `yaml:"rate_limit_rps"`
+	RateLimitBurst       int      `yaml:"rate_limit_burst"`
+	MaxConcurrentClaude  int      `yaml:"max_concurrent_claude"` // max concurrent claude sessions (default 5)
+	SeccompProfile       string   `yaml:"seccomp_profile"`
 }
 
 // PoolConfig controls pre-warmed container pooling.
@@ -126,7 +129,7 @@ func DefaultConfig() *Config {
 			Host:            "0.0.0.0",
 			Port:            8080,
 			ReadTimeout:     30 * time.Second,
-			WriteTimeout:    65 * time.Second, // > max sandbox timeout + overhead
+			WriteTimeout:    31 * time.Minute, // > max claude timeout (30min) + overhead
 			ShutdownTimeout: 30 * time.Second,
 			MaxRequestBody:  1 << 20, // 1MB
 		},
@@ -159,9 +162,10 @@ func DefaultConfig() *Config {
 			Sample:  0.1,
 		},
 		Security: SecurityConfig{
-			APIKeyHeader:   "X-API-Key",
-			RateLimitRPS:   100,
-			RateLimitBurst: 200,
+			APIKeyHeader:        "X-API-Key",
+			RateLimitRPS:        100,
+			RateLimitBurst:      200,
+			MaxConcurrentClaude: 5,
 		},
 		Pool: PoolConfig{
 			Enabled:     true,
@@ -172,6 +176,9 @@ func DefaultConfig() *Config {
 		},
 		TLS: TLSConfig{
 			Enabled: false,
+		},
+		AuthProxy: AuthProxyConfig{
+			MaxProxyRPM: 300,
 		},
 	}
 }
@@ -206,6 +213,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Database.DSN != "" && strings.Contains(c.Database.DSN, "sslmode=disable") {
 		log.Warn().Msg("database DSN has sslmode=disable — connections to Postgres are unencrypted")
+	}
+	if len(c.Security.AllowedKeys) == 0 && !c.Security.AllowUnauthenticated {
+		log.Warn().Msg("security.allowed_keys is empty and allow_unauthenticated is false — all requests will be rejected; set allowed_keys or allow_unauthenticated: true")
 	}
 	return nil
 }

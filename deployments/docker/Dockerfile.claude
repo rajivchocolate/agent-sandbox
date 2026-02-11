@@ -1,6 +1,14 @@
 # syntax=docker/dockerfile:1
 FROM node:20-slim
 
+# Install Go toolchain for Go project support
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git ca-certificates gcc libc6-dev make && \
+    curl -fsSL https://go.dev/dl/go1.24.0.linux-$(dpkg --print-architecture).tar.gz | \
+    tar -C /usr/local -xzf - && \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/go/bin:$PATH"
+
 RUN npm install -g @anthropic-ai/claude-code && \
     mkdir -p /workspace /home/node/.claude && \
     chown -R node:node /home/node/.claude /workspace

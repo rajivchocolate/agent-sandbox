@@ -34,7 +34,11 @@ func NewServer(cfg *config.Config, backend sandbox.Backend, db *storage.DB, audi
 	}
 
 	if len(cfg.Security.AllowedKeys) == 0 {
-		log.Warn().Msg("no API keys configured — authentication is disabled, all requests will be accepted")
+		if cfg.Security.AllowUnauthenticated {
+			log.Warn().Msg("no API keys configured — allow_unauthenticated is true, all requests will be accepted")
+		} else {
+			log.Warn().Msg("no API keys configured and allow_unauthenticated is false — all requests will be rejected")
+		}
 	}
 
 	// Execution API — wrapped with auth
@@ -45,7 +49,7 @@ func NewServer(cfg *config.Config, backend sandbox.Backend, db *storage.DB, audi
 	apiMux.HandleFunc("GET /executions/{id}", handlers.HandleGetExecution)
 	apiMux.HandleFunc("DELETE /executions/{id}", handlers.HandleKillExecution)
 
-	authedAPI := AuthMiddleware(cfg.Security.AllowedKeys)(apiMux)
+	authedAPI := AuthMiddleware(cfg.Security.AllowedKeys, cfg.Security.AllowUnauthenticated)(apiMux)
 
 	// Top-level mux: health/metrics bypass auth, everything else goes through auth
 	mux := http.NewServeMux()
@@ -55,6 +59,7 @@ func NewServer(cfg *config.Config, backend sandbox.Backend, db *storage.DB, audi
 
 	// Apply middleware chain (outermost first)
 	var handler http.Handler = mux
+	handler = ConcurrentClaudeMiddleware(cfg.Security.MaxConcurrentClaude)(handler)
 	handler = MetricsMiddleware(metrics)(handler)
 	handler = RateLimitMiddleware(cfg.Security.RateLimitRPS, cfg.Security.RateLimitBurst)(handler)
 	handler = MaxBodyMiddleware(cfg.Server.MaxRequestBody)(handler)

@@ -1,4 +1,4 @@
-.PHONY: build test run clean docker-build docker-run lint security-scan fmt vet help
+.PHONY: build test run clean docker-build docker-run lint security-scan fmt vet ci vulncheck help
 
 # Build variables
 BINARY_SERVER = bin/sandbox-server
@@ -74,6 +74,10 @@ vet:
 security-scan:
 	gosec -exclude-generated ./...
 
+## vulncheck: Check for known vulnerabilities in dependencies
+vulncheck:
+	govulncheck ./...
+
 ## docker-build: Build the server Docker image
 docker-build:
 	docker build -f deployments/docker/Dockerfile.server -t safe-agent-sandbox:$(VERSION) .
@@ -91,9 +95,13 @@ deps:
 	go mod download
 	go mod tidy
 
-## setup: Install development tools (golangci-lint, gosec, gofumpt)
+## ci: Run the same checks as CI (build, vet, unit tests, e2e, security scan, lint)
+ci: build vet test-unit test-e2e security-scan vulncheck lint
+
+## setup: Install development tools (golangci-lint, gosec, govulncheck, gofumpt)
 setup:
 	go install github.com/securego/gosec/v2/cmd/gosec@latest
+	go install golang.org/x/vuln/cmd/govulncheck@latest
 	go install mvdan.cc/gofumpt@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 

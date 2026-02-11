@@ -120,7 +120,7 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	defer os.RemoveAll(hostDir)
 
 	codeFile := filepath.Join(hostDir, "code"+rt.FileExtension())
-	if err := os.WriteFile(codeFile, []byte(req.Code), 0444); err != nil {
+	if err := os.WriteFile(codeFile, []byte(req.Code), 0400); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
 	}
 
@@ -131,7 +131,7 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 
 	start := time.Now()
 
-	cmd := exec.CommandContext(execCtx, "docker", args...)
+	cmd := exec.CommandContext(execCtx, "docker", args...) // #nosec G204 -- args built internally by buildDockerArgs, not from raw user input
 
 	if d.dockerHost != "" {
 		cmd.Env = append(os.Environ(), "DOCKER_HOST="+d.dockerHost)

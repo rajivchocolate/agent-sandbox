@@ -33,7 +33,7 @@ func NewClient(ctx context.Context, socket, namespace string) (*Client, error) {
 
 	// Verify the connection works
 	if _, err := inner.Version(ctx); err != nil {
-		inner.Close()
+		_ = inner.Close()
 		return nil, fmt.Errorf("containerd health check failed: %w", err)
 	}
 
@@ -79,7 +79,7 @@ func (c *Client) Reconnect(ctx context.Context) error {
 
 	// Close the old connection
 	if c.inner != nil {
-		c.inner.Close()
+		_ = c.inner.Close()
 	}
 
 	inner, err := containerd.New(c.socket,
@@ -91,7 +91,7 @@ func (c *Client) Reconnect(ctx context.Context) error {
 	}
 
 	if _, err := inner.Version(ctx); err != nil {
-		inner.Close()
+		_ = inner.Close()
 		return fmt.Errorf("reconnect health check failed: %w", err)
 	}
 

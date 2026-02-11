@@ -136,7 +136,7 @@ func (r *Runner) executeInternal(ctx context.Context, req ExecutionRequest, stdo
 
 	codeFileName := "code" + rt.FileExtension()
 	hostCodePath := filepath.Join(hostCodeDir, codeFileName)
-	if err := os.WriteFile(hostCodePath, []byte(req.Code), 0444); err != nil {
+	if err := os.WriteFile(hostCodePath, []byte(req.Code), 0400); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
 	}
 

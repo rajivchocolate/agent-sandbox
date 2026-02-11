@@ -60,7 +60,7 @@ func newContainerdBackend(ctx context.Context, cfg *config.Config) (Backend, err
 
 	runner, err := NewRunner(ctx, client, cfg.Sandbox.MaxConcurrent)
 	if err != nil {
-		client.Close()
+		_ = client.Close()
 		return nil, err
 	}
 

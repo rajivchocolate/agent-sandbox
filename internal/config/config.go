@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -90,7 +91,7 @@ type TLSConfig struct {
 
 // Load reads configuration from a YAML file.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path)) // #nosec G304 -- path comes from CLI flag or hardcoded default
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}

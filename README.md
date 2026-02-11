@@ -51,6 +51,14 @@ Response looks like:
 }
 ```
 
+### Performance
+
+The first execution for a given language is slow (~1-2s) because Docker has to create the container from scratch -- pull layers into cache, set up the filesystem overlay, start the process. After that first run, subsequent executions of the same language are much faster (~100-250ms) because Docker caches the image layers and the overlay setup is quicker.
+
+On Linux with containerd, cold starts are faster (~500ms) and warm starts can get under 50ms. The codebase has a container pool stub (`internal/sandbox/pool.go`) meant to pre-warm containers for near-instant startup, but that's not wired up yet.
+
+If you're running this in production and latency matters, keep a steady trickle of requests going so the Docker image cache stays warm. Or run on Linux with containerd.
+
 For streaming output (useful for long-running code), use the SSE endpoint:
 
 ```bash
@@ -255,9 +263,12 @@ make test-unit      # unit tests only (no docker needed)
 make test-e2e       # e2e security tests (needs docker)
 make lint           # golangci-lint
 make security-scan  # gosec
+make vulncheck      # govulncheck (dependency CVEs)
+make ci             # run everything CI runs (build, vet, tests, security, lint)
+make setup          # install dev tools (gosec, govulncheck, golangci-lint, gofumpt)
 ```
 
-The e2e tests actually spin up containers and try escape attempts (fork bombs, filesystem writes, network access) to make sure the sandbox holds up.
+`make ci` mirrors the GitHub Actions pipeline exactly, so if it passes locally it'll pass in CI. The e2e tests spin up real containers and try escape attempts (fork bombs, filesystem writes, network access) to make sure the sandbox holds.
 
 ## Project layout
 

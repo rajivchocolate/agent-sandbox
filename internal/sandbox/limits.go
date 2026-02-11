@@ -46,7 +46,7 @@ func ApplyResourceLimits(spec *specs.Spec, limits ResourceLimits) {
 		spec.Linux.Resources = &specs.LinuxResources{}
 	}
 
-	shares := uint64(limits.CPUShares)
+	shares := safeUint64(limits.CPUShares)
 
 	spec.Linux.Resources.CPU = &specs.LinuxCPU{
 		Shares: &shares,
@@ -76,11 +76,18 @@ func ApplyResourceLimits(spec *specs.Spec, limits ResourceLimits) {
 
 	spec.Process.Rlimits = []specs.POSIXRlimit{
 		{Type: "RLIMIT_NOFILE", Hard: 256, Soft: 256},
-		{Type: "RLIMIT_NPROC", Hard: uint64(limits.PidsLimit), Soft: uint64(limits.PidsLimit)},
-		{Type: "RLIMIT_FSIZE", Hard: uint64(tmpfsBytes), Soft: uint64(tmpfsBytes)},
+		{Type: "RLIMIT_NPROC", Hard: safeUint64(limits.PidsLimit), Soft: safeUint64(limits.PidsLimit)},
+		{Type: "RLIMIT_FSIZE", Hard: safeUint64(tmpfsBytes), Soft: safeUint64(tmpfsBytes)},
 		{Type: "RLIMIT_CORE", Hard: 0, Soft: 0},
 		{Type: "RLIMIT_STACK", Hard: 8388608, Soft: 8388608},
 	}
+}
+
+func safeUint64(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
 }
 
 func appendIfNotExists(mounts []specs.Mount, m specs.Mount) []specs.Mount {

@@ -168,7 +168,9 @@ func runHealth(_ *cobra.Command, _ []string) error {
 	defer resp.Body.Close()
 
 	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
 	formatted, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(formatted))
 	return nil
@@ -188,7 +190,9 @@ func runList(_ *cobra.Command, _ []string) error {
 	defer resp.Body.Close()
 
 	var result any
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
 	formatted, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(formatted))
 	return nil

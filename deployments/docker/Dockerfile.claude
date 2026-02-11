@@ -1,8 +1,26 @@
+# syntax=docker/dockerfile:1
 FROM node:20-slim
 
 RUN npm install -g @anthropic-ai/claude-code && \
     mkdir -p /workspace /home/node/.claude && \
     chown -R node:node /home/node/.claude /workspace
 
+# Entrypoint wrapper: reads auth token from secret file into env, then execs the command.
+# This avoids passing tokens via -e (visible in docker inspect / /proc/*/environ).
+RUN <<'EOF'
+cat > /usr/local/bin/entrypoint.sh <<'SCRIPT'
+#!/bin/sh
+if [ -f /run/secrets/auth_token ]; then
+    token=$(cat /run/secrets/auth_token)
+    if [ -n "$token" ]; then
+        export ANTHROPIC_API_KEY="$token"
+    fi
+fi
+exec "$@"
+SCRIPT
+chmod 755 /usr/local/bin/entrypoint.sh
+EOF
+
 USER node
 WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

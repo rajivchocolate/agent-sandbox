@@ -9,11 +9,12 @@ func (c *ClaudeRuntime) Name() string { return "claude" }
 func (c *ClaudeRuntime) Image() string { return "sandbox-claude:latest" }
 
 func (c *ClaudeRuntime) Command(codePath string) []string {
-	// Pipe the prompt file into claude via stdin to avoid shell injection.
-	// Single-quoted path prevents any shell metacharacter expansion.
+	// Use positional params ($1) instead of string interpolation for defense in depth.
+	// codePath is our temp file so low risk, but this prevents any shell metacharacter issues.
 	return []string{
 		"sh", "-c",
-		fmt.Sprintf("cat '%s' | claude -p --dangerously-skip-permissions --output-format text", codePath),
+		`cat "$1" | claude -p --dangerously-skip-permissions --output-format text`,
+		"_", codePath,
 	}
 }
 

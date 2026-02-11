@@ -120,8 +120,12 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	defer os.RemoveAll(hostDir)
 
 	codeFile := filepath.Join(hostDir, "code"+rt.FileExtension())
-	if err := os.WriteFile(codeFile, []byte(req.Code), 0400); err != nil {
+	if err := os.WriteFile(codeFile, []byte(req.Code), 0600); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
+	}
+	// Container runs as nobody (UID 65534), so the file must be world-readable
+	if err := os.Chmod(codeFile, 0444); err != nil { // #nosec G302 -- world-readable needed: container runs as nobody (UID 65534)
+		return nil, &ExecutionError{ExecID: execID, Op: "chmod_code", Err: err}
 	}
 
 	containerCodePath := "/workspace/code" + rt.FileExtension()

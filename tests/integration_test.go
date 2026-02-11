@@ -59,7 +59,7 @@ func TestHealthEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(api.HealthResponse{
+		_ = json.NewEncoder(w).Encode(api.HealthResponse{
 			Status:     "ok",
 			Containerd: false,
 			Database:   false,
@@ -142,7 +142,7 @@ func TestExecuteValidation(t *testing.T) {
 			}
 
 			var errResp api.ErrorResponse
-			json.NewDecoder(resp.Body).Decode(&errResp)
+			_ = json.NewDecoder(resp.Body).Decode(&errResp)
 			if errResp.Code != tt.wantCode {
 				t.Errorf("expected error code %q, got %q", tt.wantCode, errResp.Code)
 			}

@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -103,7 +102,7 @@ func (s *Server) handleHealth(db *storage.DB) http.HandlerFunc {
 			Status:     "ok",
 			Database:   dbOK,
 			Containerd: true, // Would check runner.client.Healthy() in practice
-			Uptime:     fmt.Sprintf("%s", time.Since(s.startTime).Round(time.Second)),
+			Uptime:     time.Since(s.startTime).Round(time.Second).String(),
 		}
 
 		if !dbOK {

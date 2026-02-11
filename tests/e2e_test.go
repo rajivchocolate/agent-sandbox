@@ -24,6 +24,9 @@ func requireDocker(t *testing.T) {
 // TestE2E runs real code in Docker containers and verifies the sandbox
 // blocks escape attempts. Requires Docker to be available.
 func TestE2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode")
+	}
 	requireDocker(t)
 
 	runner := sandbox.NewDockerRunner(10)
@@ -202,6 +205,9 @@ except (PermissionError, OSError) as e:
 
 // TestE2ETimeout verifies that the timeout is enforced.
 func TestE2ETimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode")
+	}
 	requireDocker(t)
 
 	runner := sandbox.NewDockerRunner(10)

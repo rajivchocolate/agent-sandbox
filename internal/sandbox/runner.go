@@ -136,8 +136,12 @@ func (r *Runner) executeInternal(ctx context.Context, req ExecutionRequest, stdo
 
 	codeFileName := "code" + rt.FileExtension()
 	hostCodePath := filepath.Join(hostCodeDir, codeFileName)
-	if err := os.WriteFile(hostCodePath, []byte(req.Code), 0400); err != nil {
+	if err := os.WriteFile(hostCodePath, []byte(req.Code), 0600); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
+	}
+	// Container runs as nobody (UID 65534), so the file must be world-readable
+	if err := os.Chmod(hostCodePath, 0444); err != nil { // #nosec G302 -- world-readable needed: container runs as nobody (UID 65534)
+		return nil, &ExecutionError{ExecID: execID, Op: "chmod_code", Err: err}
 	}
 
 	image, err := r.client.PullImage(execCtx, rt.Image())

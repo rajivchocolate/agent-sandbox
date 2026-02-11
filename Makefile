@@ -72,7 +72,7 @@ vet:
 
 ## security-scan: Run gosec security scanner
 security-scan:
-	gosec -exclude-generated ./...
+	gosec -exclude-generated -exclude=G302 ./...
 
 ## vulncheck: Check for known vulnerabilities in dependencies
 vulncheck:

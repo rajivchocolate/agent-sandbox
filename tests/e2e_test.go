@@ -27,7 +27,7 @@ func TestE2E(t *testing.T) {
 	}
 	requireDocker(t)
 
-	runner := sandbox.NewDockerRunner(10)
+	runner := sandbox.NewDockerRunner(10, nil)
 	defer runner.Close()
 
 	tests := []struct {
@@ -308,7 +308,7 @@ func TestE2ETimeout(t *testing.T) {
 	}
 	requireDocker(t)
 
-	runner := sandbox.NewDockerRunner(10)
+	runner := sandbox.NewDockerRunner(10, nil)
 	defer runner.Close()
 
 	ctx := context.Background()
@@ -338,7 +338,7 @@ func TestE2EClaudeRuntime(t *testing.T) {
 		t.Skip("sandbox-claude:latest image not built, skipping (run: make claude-image)")
 	}
 
-	runner := sandbox.NewDockerRunner(10)
+	runner := sandbox.NewDockerRunner(10, nil)
 	defer runner.Close()
 
 	// Test that the claude runtime validates empty prompts

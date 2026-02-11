@@ -18,26 +18,93 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"safe-agent-sandbox/internal/runtime"
+	"safe-agent-sandbox/pkg/seccomp"
 )
+
+// envBlocklist contains env var keys that must never be passed into a container.
+var envBlocklist = map[string]bool{
+	"LD_PRELOAD":      true,
+	"LD_LIBRARY_PATH": true,
+	"HTTP_PROXY":      true,
+	"HTTPS_PROXY":     true,
+	"NODE_OPTIONS":    true,
+	"PYTHONPATH":      true,
+	"PATH":            true,
+	"HOME":            true,
+	"USER":            true,
+}
+
+// sensitivePathPrefixes are directories that must never be mounted as WorkDir.
+var sensitivePathPrefixes = []string{"/etc", "/var", "/root"}
+
+// sensitiveHomeDirs are subdirectories of a home folder that indicate sensitive secrets.
+var sensitiveHomeDirs = []string{".ssh", ".aws", ".gnupg", ".claude"}
 
 // DockerRunner is the Docker-based sandbox backend (macOS, or Linux without containerd).
 type DockerRunner struct {
-	runtimes   *runtime.Registry
-	sem        chan struct{}
-	active     atomic.Int64
-	mu         sync.Mutex
-	closed     bool
-	dockerHost string // resolved DOCKER_HOST (e.g. from Docker context)
+	runtimes     *runtime.Registry
+	sem          chan struct{}
+	active       atomic.Int64
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	closed       bool
+	dockerHost   string   // resolved DOCKER_HOST (e.g. from Docker context)
+	allowedRoots []string // WorkDir must be under one of these
+	cancelCleanup context.CancelFunc
 }
 
-func NewDockerRunner(maxConcurrent int) *DockerRunner {
+func NewDockerRunner(maxConcurrent int, allowedRoots []string) *DockerRunner {
 	if maxConcurrent < 1 {
 		maxConcurrent = 100
 	}
-	return &DockerRunner{
-		runtimes:   runtime.NewRegistry(),
-		sem:        make(chan struct{}, maxConcurrent),
-		dockerHost: resolveDockerHost(),
+	d := &DockerRunner{
+		runtimes:     runtime.NewRegistry(),
+		sem:          make(chan struct{}, maxConcurrent),
+		dockerHost:   resolveDockerHost(),
+		allowedRoots: allowedRoots,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	d.cancelCleanup = cancel
+	go d.orphanCleanupLoop(ctx)
+
+	return d
+}
+
+// orphanCleanupLoop periodically kills orphaned sandbox containers that survived server crashes.
+func (d *DockerRunner) orphanCleanupLoop(ctx context.Context) {
+	// Run once on startup
+	d.cleanupOrphans()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			d.cleanupOrphans()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (d *DockerRunner) cleanupOrphans() {
+	cmd := exec.Command("docker", "ps", "--filter", "name=sandbox-", "-q") // #nosec G204 -- no user input
+	if d.dockerHost != "" {
+		cmd.Env = append(os.Environ(), "DOCKER_HOST="+d.dockerHost)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	ids := strings.Fields(strings.TrimSpace(string(out)))
+	for _, id := range ids {
+		log.Warn().Str("container_id", id).Msg("killing orphaned sandbox container")
+		kill := exec.Command("docker", "rm", "-f", id) // #nosec G204 -- id from docker ps
+		if d.dockerHost != "" {
+			kill.Env = append(os.Environ(), "DOCKER_HOST="+d.dockerHost)
+		}
+		_ = kill.Run()
 	}
 }
 
@@ -81,7 +148,7 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 
 	logger.Info().Msg("docker execution requested")
 
-	if err := d.validateRequest(req); err != nil {
+	if err := d.validateRequest(&req); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "validate", Err: err}
 	}
 
@@ -92,6 +159,8 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 		return nil, &ExecutionError{ExecID: execID, Op: "acquire_slot", Err: ctx.Err()}
 	}
 
+	d.wg.Add(1)
+	defer d.wg.Done()
 	d.active.Add(1)
 	defer d.active.Add(-1)
 
@@ -130,7 +199,41 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 		containerCodePath = "/tmp/prompt" + rt.FileExtension()
 	}
 
-	args := d.buildDockerArgs(execID, rt, codeFile, containerCodePath, req)
+	// Write auth token to a secret file (not env var) so it's not visible via docker inspect / /proc/*/environ.
+	isClaude := rt.Name() == "claude"
+	if isClaude {
+		for _, key := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+			if v := os.Getenv(key); v != "" {
+				tokenPath := filepath.Join(hostDir, "auth_token")
+				if err := os.WriteFile(tokenPath, []byte(v), 0400); err != nil { // #nosec G306 -- mode 0400
+					return nil, &ExecutionError{ExecID: execID, Op: "write_token", Err: err}
+				}
+				break
+			}
+		}
+	}
+
+	// Write seccomp profile to temp file for Docker's --security-opt.
+	var seccompPath string
+	{
+		var profileJSON []byte
+		var profileErr error
+		if isClaude || req.NetworkEnabled {
+			profileJSON, profileErr = seccomp.DockerNetworkProfileJSON()
+		} else {
+			profileJSON, profileErr = seccomp.DockerProfileJSON()
+		}
+		if profileErr != nil {
+			return nil, &ExecutionError{ExecID: execID, Op: "seccomp_profile", Err: profileErr}
+		}
+		seccompFile := filepath.Join(hostDir, "seccomp.json")
+		if err := os.WriteFile(seccompFile, profileJSON, 0444); err != nil { // #nosec G306 -- read-only
+			return nil, &ExecutionError{ExecID: execID, Op: "write_seccomp", Err: err}
+		}
+		seccompPath = seccompFile
+	}
+
+	args := d.buildDockerArgs(execID, rt, codeFile, containerCodePath, hostDir, seccompPath, req)
 
 	start := time.Now()
 
@@ -202,6 +305,7 @@ func (d *DockerRunner) buildDockerArgs(
 	execID string,
 	rt runtime.Runtime,
 	hostCodeFile, containerCodePath string,
+	hostDir, seccompPath string,
 	req ExecutionRequest,
 ) []string {
 	isClaude := rt.Name() == "claude"
@@ -233,6 +337,7 @@ func (d *DockerRunner) buildDockerArgs(
 		"--network", network,
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
+		"--security-opt", "seccomp=" + seccompPath,
 		"--memory", fmt.Sprintf("%dm", limits.MemoryMB),
 		"--memory-swap", fmt.Sprintf("%dm", limits.MemoryMB),
 		"--pids-limit", fmt.Sprintf("%d", limits.PidsLimit),
@@ -258,10 +363,12 @@ func (d *DockerRunner) buildDockerArgs(
 			)
 		}
 
-		for _, key := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
-			if v := os.Getenv(key); v != "" {
-				args = append(args, "-e", key+"="+v)
-			}
+		// Mount auth token as a secret file instead of passing as env var.
+		tokenPath := filepath.Join(hostDir, "auth_token")
+		if _, err := os.Stat(tokenPath); err == nil {
+			args = append(args,
+				"-v", fmt.Sprintf("%s:/run/secrets/auth_token:ro", tokenPath),
+			)
 		}
 	}
 
@@ -284,7 +391,7 @@ func claudeDefaultLimits() ResourceLimits {
 	}
 }
 
-func (d *DockerRunner) validateRequest(req ExecutionRequest) error {
+func (d *DockerRunner) validateRequest(req *ExecutionRequest) error {
 	if req.Code == "" {
 		return fmt.Errorf("%w: code is empty", ErrInvalidRequest)
 	}
@@ -302,6 +409,7 @@ func (d *DockerRunner) validateRequest(req ExecutionRequest) error {
 		return fmt.Errorf("%w: timeout exceeds %s maximum", ErrInvalidRequest, maxTimeout)
 	}
 	if req.WorkDir != "" {
+		// Resolve symlinks to prevent TOCTOU race — store the real path back into req.
 		realPath, err := filepath.EvalSymlinks(req.WorkDir)
 		if err != nil {
 			return fmt.Errorf("%w: work_dir is not valid", ErrInvalidRequest)
@@ -311,6 +419,35 @@ func (d *DockerRunner) validateRequest(req ExecutionRequest) error {
 			return fmt.Errorf("%w: work_dir is not a valid directory", ErrInvalidRequest)
 		}
 		req.WorkDir = realPath
+
+		// Block known sensitive prefixes
+		for _, prefix := range sensitivePathPrefixes {
+			if strings.HasPrefix(realPath, prefix+"/") || realPath == prefix {
+				return fmt.Errorf("%w: work_dir %q is under a sensitive path", ErrInvalidRequest, prefix)
+			}
+		}
+		// Block home directories containing sensitive subdirs
+		for _, dir := range sensitiveHomeDirs {
+			if strings.Contains(realPath, "/"+dir+"/") || strings.HasSuffix(realPath, "/"+dir) {
+				return fmt.Errorf("%w: work_dir contains sensitive directory %q", ErrInvalidRequest, dir)
+			}
+		}
+
+		// Check WorkDir is under an allowed root
+		if len(d.allowedRoots) > 0 {
+			allowed := false
+			for _, root := range d.allowedRoots {
+				if strings.HasPrefix(realPath, root+"/") || realPath == root {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("%w: work_dir is not under an allowed root", ErrInvalidRequest)
+			}
+		} else {
+			return fmt.Errorf("%w: no allowed_workdir_roots configured; WorkDir mounts are disabled", ErrInvalidRequest)
+		}
 	}
 	for _, env := range req.EnvVars {
 		if !strings.Contains(env, "=") {
@@ -321,6 +458,9 @@ func (d *DockerRunner) validateRequest(req ExecutionRequest) error {
 			if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
 				return fmt.Errorf("%w: env var key contains invalid characters", ErrInvalidRequest)
 			}
+		}
+		if envBlocklist[strings.ToUpper(key)] {
+			return fmt.Errorf("%w: env var %q is blocked for security reasons", ErrInvalidRequest, key)
 		}
 	}
 	if req.Limits != (ResourceLimits{}) {
@@ -339,5 +479,22 @@ func (d *DockerRunner) Close() error {
 	d.mu.Lock()
 	d.closed = true
 	d.mu.Unlock()
+
+	if d.cancelCleanup != nil {
+		d.cancelCleanup()
+	}
+
+	// Wait up to 30s for active executions to drain.
+	done := make(chan struct{})
+	go func() {
+		d.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Info().Msg("all docker executions drained")
+	case <-time.After(30 * time.Second):
+		log.Warn().Int64("active", d.active.Load()).Msg("timed out waiting for docker executions to drain")
+	}
 	return nil
 }

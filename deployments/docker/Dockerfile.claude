@@ -1,0 +1,8 @@
+FROM node:20-slim
+
+RUN npm install -g @anthropic-ai/claude-code && \
+    mkdir -p /workspace /home/node/.claude && \
+    chown -R node:node /home/node/.claude /workspace
+
+USER node
+WORKDIR /workspace

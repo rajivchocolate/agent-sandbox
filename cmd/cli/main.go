@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,6 +19,7 @@ var (
 	timeout   string
 	language  string
 	memoryMB  int64
+	workDir   string
 )
 
 func main() {
@@ -29,7 +31,6 @@ func main() {
 	root.PersistentFlags().StringVar(&serverURL, "server", "http://localhost:8080", "Server URL")
 	root.PersistentFlags().StringVar(&apiKey, "api-key", os.Getenv("SANDBOX_API_KEY"), "API key")
 
-	// Execute command
 	execCmd := &cobra.Command{
 		Use:   "exec [code]",
 		Short: "Execute code in a sandbox",
@@ -41,7 +42,6 @@ func main() {
 	execCmd.Flags().Int64Var(&memoryMB, "memory", 256, "Memory limit in MB")
 	root.AddCommand(execCmd)
 
-	// Execute from file
 	execFileCmd := &cobra.Command{
 		Use:   "exec-file [file]",
 		Short: "Execute code from a file",
@@ -53,14 +53,23 @@ func main() {
 	execFileCmd.Flags().Int64Var(&memoryMB, "memory", 256, "Memory limit in MB")
 	root.AddCommand(execFileCmd)
 
-	// Health check
+	claudeCmd := &cobra.Command{
+		Use:   "claude [prompt]",
+		Short: "Run Claude Code in a sandboxed container",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  runClaude,
+	}
+	claudeCmd.Flags().StringVar(&workDir, "dir", "", "Project directory to mount (default: current directory)")
+	claudeCmd.Flags().StringVar(&timeout, "timeout", "5m", "Execution timeout")
+	claudeCmd.Flags().Int64Var(&memoryMB, "memory", 1024, "Memory limit in MB")
+	root.AddCommand(claudeCmd)
+
 	root.AddCommand(&cobra.Command{
 		Use:   "health",
 		Short: "Check server health",
 		RunE:  runHealth,
 	})
 
-	// List executions
 	root.AddCommand(&cobra.Command{
 		Use:   "list",
 		Short: "List recent executions",
@@ -78,7 +87,6 @@ func runExec(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		code = args[0]
 	} else {
-		// Read from stdin
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("reading stdin: %w", err)
@@ -86,7 +94,41 @@ func runExec(cmd *cobra.Command, args []string) error {
 		code = string(data)
 	}
 
-	return executeCode(code, language)
+	return executeCode(code, language, "")
+}
+
+func runClaude(_ *cobra.Command, args []string) error {
+	var prompt string
+
+	if len(args) > 0 {
+		prompt = args[0]
+	} else {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("reading stdin: %w", err)
+		}
+		prompt = string(data)
+	}
+
+	if prompt == "" {
+		return fmt.Errorf("prompt is required")
+	}
+
+	dir := workDir
+	if dir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getting working directory: %w", err)
+		}
+		dir = cwd
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolving directory: %w", err)
+	}
+
+	return executeCode(prompt, "claude", absDir)
 }
 
 func runExecFile(cmd *cobra.Command, args []string) error {
@@ -95,7 +137,6 @@ func runExecFile(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading file: %w", err)
 	}
 
-	// Auto-detect language from extension
 	if language == "" {
 		switch ext := fileExtension(args[0]); ext {
 		case ".py":
@@ -109,20 +150,32 @@ func runExecFile(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return executeCode(string(data), language)
+	return executeCode(string(data), language, "")
 }
 
-func executeCode(code, lang string) error {
+func executeCode(code, lang, projectDir string) error {
 	payload := map[string]any{
 		"code":     code,
 		"language": lang,
 		"timeout":  timeout,
 		"limits": map[string]any{
-			"memory_mb": memoryMB,
+			"memory_mb":  memoryMB,
 			"cpu_shares": 512,
 			"pids_limit": 50,
 			"disk_mb":    100,
 		},
+	}
+
+	if lang == "claude" {
+		payload["limits"] = map[string]any{
+			"memory_mb":  memoryMB,
+			"cpu_shares": 2048,
+			"pids_limit": 200,
+			"disk_mb":    500,
+		}
+		if projectDir != "" {
+			payload["work_dir"] = projectDir
+		}
 	}
 
 	body, _ := json.Marshal(payload)
@@ -136,7 +189,11 @@ func executeCode(code, lang string) error {
 		req.Header.Set("X-API-Key", apiKey)
 	}
 
-	client := &http.Client{Timeout: 70 * time.Second}
+	httpTimeout := 70 * time.Second
+	if lang == "claude" {
+		httpTimeout = 6 * time.Minute
+	}
+	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
@@ -148,11 +205,9 @@ func executeCode(code, lang string) error {
 		return fmt.Errorf("decoding response: %w", err)
 	}
 
-	// Pretty print
 	formatted, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(formatted))
 
-	// Exit with the sandbox exit code
 	if exitCode, ok := result["exit_code"].(float64); ok && exitCode != 0 {
 		os.Exit(int(exitCode))
 	}

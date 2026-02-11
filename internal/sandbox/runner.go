@@ -29,6 +29,8 @@ type ExecutionRequest struct {
 	Timeout        time.Duration  `json:"timeout"`
 	Limits         ResourceLimits `json:"limits"`
 	NetworkEnabled bool           `json:"network_enabled"`
+	WorkDir        string         `json:"work_dir,omitempty"` // Host directory to mount as /workspace (claude runtime)
+	EnvVars        []string       `json:"env_vars,omitempty"` // Additional env vars (e.g. CLAUDE_CODE_OAUTH_TOKEN)
 }
 
 type ExecutionResult struct {
@@ -139,8 +141,7 @@ func (r *Runner) executeInternal(ctx context.Context, req ExecutionRequest, stdo
 	if err := os.WriteFile(hostCodePath, []byte(req.Code), 0600); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
 	}
-	// Container runs as nobody (UID 65534), so the file must be world-readable
-	if err := os.Chmod(hostCodePath, 0444); err != nil { // #nosec G302 -- world-readable needed: container runs as nobody (UID 65534)
+	if err := os.Chmod(hostCodePath, 0444); err != nil { // #nosec G302 -- container runs as nobody (UID 65534)
 		return nil, &ExecutionError{ExecID: execID, Op: "chmod_code", Err: err}
 	}
 
@@ -325,6 +326,10 @@ func (r *Runner) validateRequest(req ExecutionRequest) error {
 	}
 	if len(req.Code) > 1<<20 {
 		return fmt.Errorf("%w: code exceeds 1MB limit", ErrInvalidRequest)
+	}
+
+	if req.Language == "claude" {
+		return fmt.Errorf("%w: claude runtime requires Docker backend (not containerd)", ErrUnsupportedLang)
 	}
 
 	if _, err := r.runtimes.Get(req.Language); err != nil {

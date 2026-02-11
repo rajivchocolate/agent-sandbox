@@ -48,7 +48,6 @@ func resolveDockerHost() string {
 		return h
 	}
 
-	// Ask the Docker CLI what endpoint it's using
 	out, err := exec.Command("docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
 	if err == nil {
 		host := strings.TrimSpace(string(out))
@@ -82,12 +81,10 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 
 	logger.Info().Msg("docker execution requested")
 
-	// Validate request
 	if err := d.validateRequest(req); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "validate", Err: err}
 	}
 
-	// Acquire concurrency slot
 	select {
 	case d.sem <- struct{}{}:
 		defer func() { <-d.sem }()
@@ -98,21 +95,22 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	d.active.Add(1)
 	defer d.active.Add(-1)
 
-	// Set up timeout
 	timeout := req.Timeout
 	if timeout == 0 {
-		timeout = 10 * time.Second
+		if req.Language == "claude" {
+			timeout = 5 * time.Minute
+		} else {
+			timeout = 10 * time.Second
+		}
 	}
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Get runtime config
 	rt, err := d.runtimes.Get(req.Language)
 	if err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "get_runtime", Err: err}
 	}
 
-	// Write code to a temp file on the host
 	hostDir, err := os.MkdirTemp("", "sandbox-"+execID+"-*")
 	if err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "create_temp_dir", Err: err}
@@ -123,14 +121,15 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	if err := os.WriteFile(codeFile, []byte(req.Code), 0600); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
 	}
-	// Container runs as nobody (UID 65534), so the file must be world-readable
-	if err := os.Chmod(codeFile, 0444); err != nil { // #nosec G302 -- world-readable needed: container runs as nobody (UID 65534)
+	if err := os.Chmod(codeFile, 0444); err != nil { // #nosec G302 -- container runs as nobody (UID 65534)
 		return nil, &ExecutionError{ExecID: execID, Op: "chmod_code", Err: err}
 	}
 
 	containerCodePath := "/workspace/code" + rt.FileExtension()
+	if rt.Name() == "claude" {
+		containerCodePath = "/tmp/prompt" + rt.FileExtension()
+	}
 
-	// Build docker run arguments
 	args := d.buildDockerArgs(execID, rt, codeFile, containerCodePath, req)
 
 	start := time.Now()
@@ -155,7 +154,6 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 
 	if err != nil {
 		if execCtx.Err() == context.DeadlineExceeded {
-			// Timeout
 			securityEvents = append(securityEvents, SecurityEvent{
 				Type:   "timeout",
 				Detail: fmt.Sprintf("execution exceeded %s timeout", timeout),
@@ -173,7 +171,6 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-			// Exit code 137 = killed (OOM or PID limit)
 			if exitCode == 137 {
 				securityEvents = append(securityEvents, SecurityEvent{
 					Type:   "oom_kill",
@@ -207,16 +204,33 @@ func (d *DockerRunner) buildDockerArgs(
 	hostCodeFile, containerCodePath string,
 	req ExecutionRequest,
 ) []string {
+	isClaude := rt.Name() == "claude"
+
 	limits := req.Limits
 	if limits == (ResourceLimits{}) {
-		limits = DefaultLimits()
+		if isClaude {
+			limits = claudeDefaultLimits()
+		} else {
+			limits = DefaultLimits()
+		}
+	}
+
+	network := "none"
+	if req.NetworkEnabled || isClaude {
+		network = "bridge"
+	}
+
+	user := "65534:65534"
+	home := "/tmp"
+	if isClaude {
+		user = "1000:1000"
+		home = "/home/node"
 	}
 
 	args := []string{
 		"run", "--rm",
 		"--name", "sandbox-" + execID,
-		"--read-only",
-		"--network", "none",
+		"--network", network,
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--memory", fmt.Sprintf("%dm", limits.MemoryMB),
@@ -225,25 +239,49 @@ func (d *DockerRunner) buildDockerArgs(
 		"--cpus", fmt.Sprintf("%.1f", float64(limits.CPUShares)/1024.0),
 		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,nodev,size=%dm", limits.DiskMB),
 		"-v", fmt.Sprintf("%s:%s:ro", hostCodeFile, containerCodePath),
-		"--user", "65534:65534",
-		"-e", "HOME=/tmp",
+		"--user", user,
+		"-e", "HOME=" + home,
 		"-e", "LANG=C.UTF-8",
 		"-e", "SANDBOX=true",
 	}
 
-	if req.NetworkEnabled {
-		for i, a := range args {
-			if a == "--network" && i+1 < len(args) {
-				args[i+1] = "bridge"
-				break
+	// Claude needs a writable rootfs (Node.js/npm write to global cache dirs at startup).
+	// Other runtimes get a read-only rootfs for tighter isolation.
+	if !isClaude {
+		args = append(args, "--read-only")
+	}
+
+	if isClaude {
+		if req.WorkDir != "" {
+			args = append(args,
+				"-v", fmt.Sprintf("%s:/workspace:rw", req.WorkDir),
+			)
+		}
+
+		for _, key := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+			if v := os.Getenv(key); v != "" {
+				args = append(args, "-e", key+"="+v)
 			}
 		}
+	}
+
+	for _, env := range req.EnvVars {
+		args = append(args, "-e", env)
 	}
 
 	args = append(args, rt.Image())
 	args = append(args, rt.Command(containerCodePath)...)
 
 	return args
+}
+
+func claudeDefaultLimits() ResourceLimits {
+	return ResourceLimits{
+		CPUShares: 2048,
+		MemoryMB:  1024,
+		PidsLimit: 200,
+		DiskMB:    500,
+	}
 }
 
 func (d *DockerRunner) validateRequest(req ExecutionRequest) error {
@@ -256,8 +294,34 @@ func (d *DockerRunner) validateRequest(req ExecutionRequest) error {
 	if _, err := d.runtimes.Get(req.Language); err != nil {
 		return fmt.Errorf("%w: %s", ErrUnsupportedLang, req.Language)
 	}
-	if req.Timeout > 60*time.Second {
-		return fmt.Errorf("%w: timeout exceeds 60s maximum", ErrInvalidRequest)
+	maxTimeout := 60 * time.Second
+	if req.Language == "claude" {
+		maxTimeout = 5 * time.Minute
+	}
+	if req.Timeout > maxTimeout {
+		return fmt.Errorf("%w: timeout exceeds %s maximum", ErrInvalidRequest, maxTimeout)
+	}
+	if req.WorkDir != "" {
+		realPath, err := filepath.EvalSymlinks(req.WorkDir)
+		if err != nil {
+			return fmt.Errorf("%w: work_dir is not valid", ErrInvalidRequest)
+		}
+		info, err := os.Stat(realPath)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("%w: work_dir is not a valid directory", ErrInvalidRequest)
+		}
+		req.WorkDir = realPath
+	}
+	for _, env := range req.EnvVars {
+		if !strings.Contains(env, "=") {
+			return fmt.Errorf("%w: env var must be KEY=VALUE format", ErrInvalidRequest)
+		}
+		key := env[:strings.Index(env, "=")]
+		for _, c := range key {
+			if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+				return fmt.Errorf("%w: env var key contains invalid characters", ErrInvalidRequest)
+			}
+		}
 	}
 	if req.Limits != (ResourceLimits{}) {
 		if err := req.Limits.Validate(); err != nil {

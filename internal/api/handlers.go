@@ -74,12 +74,18 @@ func (h *Handlers) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	networkEnabled := req.Perms.Network.Enabled
+	if req.Language == "claude" {
+		networkEnabled = true
+	}
+
 	execReq := sandbox.ExecutionRequest{
 		Code:           req.Code,
 		Language:       req.Language,
 		Timeout:        timeout,
 		Limits:         limits,
-		NetworkEnabled: req.Perms.Network.Enabled,
+		NetworkEnabled: networkEnabled,
+		WorkDir:        req.WorkDir,
 	}
 
 	if h.backend == nil {
@@ -212,12 +218,18 @@ func (h *Handlers) HandleExecuteStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	streamNetworkEnabled := req.Perms.Network.Enabled
+	if req.Language == "claude" {
+		streamNetworkEnabled = true
+	}
+
 	execReq := sandbox.ExecutionRequest{
 		Code:           req.Code,
 		Language:       req.Language,
 		Timeout:        timeout,
 		Limits:         limits,
-		NetworkEnabled: req.Perms.Network.Enabled,
+		NetworkEnabled: streamNetworkEnabled,
+		WorkDir:        req.WorkDir,
 	}
 
 	h.metrics.ActiveExecutions.Inc()

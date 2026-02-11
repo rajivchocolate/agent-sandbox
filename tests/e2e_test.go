@@ -21,8 +21,6 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-// TestE2E runs real code in Docker containers and verifies the sandbox
-// blocks escape attempts. Requires Docker to be available.
 func TestE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e test in short mode")
@@ -83,7 +81,7 @@ with open("/tmp/test.txt") as f:
 			wantOutput: "tmpfs works",
 		},
 
-		// === Escape attempts that should be blocked ===
+		// === Adversarial: filesystem escape attempts ===
 		{
 			name:     "block_read_etc_shadow",
 			language: "python",
@@ -91,29 +89,26 @@ with open("/tmp/test.txt") as f:
 			wantFail: true,
 		},
 		{
-			name:     "block_network_curl",
+			name:     "block_read_etc_passwd",
 			language: "bash",
-			code:     `curl -s http://google.com || wget -q -O- http://google.com || echo "NETWORK_BLOCKED"`,
+			code:     `cat /etc/passwd`,
 			wantFail: true,
-			// With --network none, curl/wget aren't available or can't connect
 		},
 		{
-			name:     "block_fork_bomb",
+			name:     "block_read_ssh_keys",
 			language: "python",
 			code: `
 import os
-pids = []
+ssh_dir = os.path.expanduser("~/.ssh")
 try:
-    for i in range(1000):
-        pid = os.fork()
-        if pid == 0:
-            import time; time.sleep(60)
-            os._exit(0)
-        pids.append(pid)
-except OSError as e:
-    print(f"FORK_BLOCKED after {len(pids)} forks: {e}")
+    for f in os.listdir(ssh_dir):
+        print(open(os.path.join(ssh_dir, f)).read())
+    print("ESCAPE: read SSH keys")
+except (FileNotFoundError, PermissionError, OSError) as e:
+    print(f"SSH_BLOCKED: {e}")
 `,
-			wantFail: true,
+			wantExit:   0,
+			wantOutput: "SSH_BLOCKED",
 		},
 		{
 			name:     "block_write_rootfs",
@@ -132,14 +127,118 @@ try:
 except (PermissionError, OSError) as e:
     print(f"WRITE_BLOCKED: {e}")
 `,
-			wantExit:   0, // The python script handles the error gracefully
+			wantExit:   0,
 			wantOutput: "WRITE_BLOCKED",
 		},
+		{
+			name:     "block_apt_install",
+			language: "bash",
+			code:     `apt-get update 2>&1 || echo "APT_BLOCKED"`,
+			wantFail: true,
+		},
+
+		// === Adversarial: network escape attempts ===
+		{
+			name:     "block_network_curl",
+			language: "bash",
+			code:     `curl -s http://google.com || wget -q -O- http://google.com || echo "NETWORK_BLOCKED"`,
+			wantFail: true,
+		},
+		{
+			name:     "block_network_python",
+			language: "python",
+			code: `
+import urllib.request
+try:
+    resp = urllib.request.urlopen("http://evil.com", timeout=3)
+    print("ESCAPE: network access succeeded")
+except Exception as e:
+    print(f"NETWORK_BLOCKED: {e}")
+`,
+			wantExit:   0,
+			wantOutput: "NETWORK_BLOCKED",
+		},
+
+		// === Adversarial: resource exhaustion ===
+		{
+			name:     "block_fork_bomb",
+			language: "python",
+			code: `
+import os
+pids = []
+try:
+    for i in range(1000):
+        pid = os.fork()
+        if pid == 0:
+            import time; time.sleep(60)
+            os._exit(0)
+        pids.append(pid)
+except OSError as e:
+    print(f"FORK_BLOCKED after {len(pids)} forks: {e}")
+`,
+			wantFail: true,
+		},
+
+		// === Adversarial: container escape attempts ===
 		{
 			name:     "block_docker_socket",
 			language: "bash",
 			code:     `ls -la /var/run/docker.sock 2>&1 || echo "DOCKER_SOCKET_BLOCKED"`,
 			wantFail: true,
+		},
+		{
+			name:     "block_proc_sysrq",
+			language: "bash",
+			code:     `cat /proc/sysrq-trigger 2>&1 || echo "PROC_BLOCKED"`,
+			wantFail: true,
+		},
+		{
+			name:     "block_mount_syscall",
+			language: "python",
+			code: `
+import ctypes
+import ctypes.util
+try:
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    ret = libc.mount(b"none", b"/tmp/escape", b"tmpfs", 0, None)
+    if ret != 0:
+        import os
+        print(f"MOUNT_BLOCKED: errno={os.strerror(ctypes.get_errno())}")
+    else:
+        print("ESCAPE: mount succeeded")
+except Exception as e:
+    print(f"MOUNT_BLOCKED: {e}")
+`,
+			wantExit:   0,
+			wantOutput: "MOUNT_BLOCKED",
+		},
+		{
+			name:     "block_chroot_escape",
+			language: "python",
+			code: `
+import os
+try:
+    os.chroot("/tmp")
+    print("ESCAPE: chroot succeeded")
+except (PermissionError, OSError) as e:
+    print(f"CHROOT_BLOCKED: {e}")
+`,
+			wantExit:   0,
+			wantOutput: "CHROOT_BLOCKED",
+		},
+		{
+			name:     "block_setuid",
+			language: "python",
+			code: `
+import os
+try:
+    os.setuid(0)
+    print("ESCAPE: setuid(0) succeeded")
+except (PermissionError, OSError) as e:
+    print(f"SETUID_BLOCKED: {e}")
+`,
+			wantExit:   0,
+			wantOutput: "SETUID_BLOCKED",
 		},
 	}
 
@@ -177,7 +276,7 @@ except (PermissionError, OSError) as e:
 					t.Logf("PASS (blocked in output): %s", strings.TrimSpace(combined))
 					return
 				}
-				// If we see evidence of successful escape, fail
+				// If we see evidence of successful escape, fail hard
 				if strings.Contains(combined, "ESCAPE") {
 					t.Fatalf("ESCAPE DETECTED: %s", combined)
 				}
@@ -203,7 +302,6 @@ except (PermissionError, OSError) as e:
 	}
 }
 
-// TestE2ETimeout verifies that the timeout is enforced.
 func TestE2ETimeout(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e test in short mode")
@@ -225,5 +323,34 @@ func TestE2ETimeout(t *testing.T) {
 	}
 	if err != sandbox.ErrTimeout {
 		t.Logf("got error (acceptable): %v", err)
+	}
+}
+
+func TestE2EClaudeRuntime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode")
+	}
+	requireDocker(t)
+
+	// Check if the claude image exists locally
+	out, err := exec.Command("docker", "images", "-q", "sandbox-claude:latest").Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		t.Skip("sandbox-claude:latest image not built, skipping (run: make claude-image)")
+	}
+
+	runner := sandbox.NewDockerRunner(10)
+	defer runner.Close()
+
+	// Test that the claude runtime validates empty prompts
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = runner.Execute(ctx, sandbox.ExecutionRequest{
+		Code:     "",
+		Language: "claude",
+		Timeout:  10 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected validation error for empty prompt")
 	}
 }

@@ -1,4 +1,4 @@
-.PHONY: build test run clean docker-build docker-run lint security-scan fmt vet ci vulncheck help
+.PHONY: build test run clean docker-build docker-run lint security-scan fmt vet ci vulncheck help claude-image
 
 # Build variables
 BINARY_SERVER = bin/sandbox-server
@@ -77,6 +77,10 @@ security-scan:
 ## vulncheck: Check for known vulnerabilities in dependencies
 vulncheck:
 	govulncheck ./...
+
+## claude-image: Build the Claude Code sandbox Docker image
+claude-image:
+	docker build -f deployments/docker/Dockerfile.claude -t sandbox-claude:latest .
 
 ## docker-build: Build the server Docker image
 docker-build:

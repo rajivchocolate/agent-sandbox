@@ -54,6 +54,9 @@ jobs:
           go-version: "1.23"
           cache: true
 
+      - name: Build Claude sandbox image
+        run: make claude-image
+
       - name: End-to-end security tests
         run: go test -race -count=1 -run TestE2E -v -timeout 120s ./tests/
 

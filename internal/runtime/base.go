@@ -37,6 +37,7 @@ func NewRegistry() *Registry {
 	r.Register(&PythonRuntime{})
 	r.Register(&NodeRuntime{})
 	r.Register(&BashRuntime{})
+	r.Register(&ClaudeRuntime{})
 	return r
 }
 
@@ -49,7 +50,7 @@ func (r *Registry) Register(rt Runtime) {
 func (r *Registry) Get(language string) (Runtime, error) {
 	rt, ok := r.runtimes[language]
 	if !ok {
-		return nil, fmt.Errorf("unsupported language: %q (supported: python, node, bash)", language)
+		return nil, fmt.Errorf("unsupported language: %q (supported: python, node, bash, claude)", language)
 	}
 	return rt, nil
 }

@@ -5,10 +5,11 @@ import "time"
 // ExecutionRequest is the API-level request to execute code in a sandbox.
 type ExecutionRequest struct {
 	Code     string         `json:"code"`
-	Language string         `json:"language"` // python, node, bash
+	Language string         `json:"language"` // python, node, bash, claude
 	Timeout  Duration       `json:"timeout,omitempty"`
 	Limits   ResourceLimits `json:"limits,omitempty"`
 	Perms    Permissions    `json:"permissions,omitempty"`
+	WorkDir  string         `json:"work_dir,omitempty"` // Host directory to mount (claude runtime)
 }
 
 // Duration wraps time.Duration for JSON marshaling as a string like "10s".

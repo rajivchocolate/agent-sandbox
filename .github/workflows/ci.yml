@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
 
       - name: Download dependencies
@@ -27,7 +27,7 @@ jobs:
         run: make build
 
       - name: Vet
-        run: go vet ./...
+        run: make vet
 
   test-unit:
     runs-on: ubuntu-latest
@@ -37,11 +37,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
 
       - name: Unit tests
-        run: go test -race -count=1 -short ./...
+        run: make test-unit
 
   test-e2e:
     runs-on: ubuntu-latest
@@ -51,14 +51,20 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
+
+      - name: Pull runtime images
+        run: |
+          docker pull python:3.12-slim
+          docker pull node:20-slim
+          docker pull alpine:3.19
 
       - name: Build Claude sandbox image
         run: make claude-image
 
       - name: End-to-end security tests
-        run: go test -race -count=1 -run TestE2E -v -timeout 120s ./tests/
+        run: make test-e2e
 
   security:
     runs-on: ubuntu-latest
@@ -68,19 +74,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
 
       - name: Install security tools
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: make setup
 
       - name: Security scan
-        run: gosec -exclude-generated -exclude=G302 ./...
+        run: make security-scan
 
       - name: Check for vulnerabilities
-        run: govulncheck ./...
+        run: make vulncheck
 
   lint:
     runs-on: ubuntu-latest
@@ -90,7 +94,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
 
       - name: golangci-lint

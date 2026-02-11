@@ -142,7 +142,7 @@ func (r *Runner) executeInternal(ctx context.Context, req ExecutionRequest, stdo
 	if err := os.WriteFile(hostCodePath, []byte(req.Code), 0600); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
 	}
-	if err := os.Chmod(hostCodePath, 0444); err != nil { // #nosec G302 -- container runs as nobody (UID 65534)
+	if err := os.Chmod(hostCodePath, 0400); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "chmod_code", Err: err}
 	}
 

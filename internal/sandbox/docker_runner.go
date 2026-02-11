@@ -190,7 +190,7 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	if err := os.WriteFile(codeFile, []byte(req.Code), 0600); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "write_code", Err: err}
 	}
-	if err := os.Chmod(codeFile, 0444); err != nil { // #nosec G302 -- container runs as nobody (UID 65534)
+	if err := os.Chmod(codeFile, 0400); err != nil {
 		return nil, &ExecutionError{ExecID: execID, Op: "chmod_code", Err: err}
 	}
 
@@ -227,7 +227,7 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 			return nil, &ExecutionError{ExecID: execID, Op: "seccomp_profile", Err: profileErr}
 		}
 		seccompFile := filepath.Join(hostDir, "seccomp.json")
-		if err := os.WriteFile(seccompFile, profileJSON, 0444); err != nil { // #nosec G306 -- read-only
+		if err := os.WriteFile(seccompFile, profileJSON, 0600); err != nil {
 			return nil, &ExecutionError{ExecID: execID, Op: "write_seccomp", Err: err}
 		}
 		seccompPath = seccompFile

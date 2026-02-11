@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -12,6 +13,8 @@ import (
 	"safe-agent-sandbox/internal/sandbox"
 	"safe-agent-sandbox/internal/storage"
 )
+
+var validUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 type Handlers struct {
 	backend      sandbox.Backend
@@ -39,7 +42,7 @@ func (h *Handlers) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	var req ExecutionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid JSON: "+err.Error(), "INVALID_REQUEST", http.StatusBadRequest, r)
+		writeError(w, "invalid request body", "INVALID_REQUEST", http.StatusBadRequest, r)
 		return
 	}
 
@@ -57,6 +60,10 @@ func (h *Handlers) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	detections := h.detector.AnalyzeCode(req.Code)
 	for _, d := range detections {
 		h.metrics.RecordSecurityEvent(d.Pattern)
+		if d.Severity == monitor.SeverityCritical.String() {
+			writeError(w, "request blocked by security policy", "SECURITY_BLOCKED", http.StatusForbidden, r)
+			return
+		}
 	}
 
 	timeout := 10 * time.Second
@@ -178,7 +185,7 @@ func (h *Handlers) HandleExecuteStream(w http.ResponseWriter, r *http.Request) {
 
 	var req ExecutionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, "invalid JSON: "+err.Error(), "INVALID_REQUEST", http.StatusBadRequest, r)
+		writeError(w, "invalid request body", "INVALID_REQUEST", http.StatusBadRequest, r)
 		return
 	}
 
@@ -267,8 +274,8 @@ func (h *Handlers) HandleGetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, "execution ID required", "INVALID_REQUEST", http.StatusBadRequest, r)
+	if id == "" || !validUUID.MatchString(id) {
+		writeError(w, "valid execution ID required", "INVALID_REQUEST", http.StatusBadRequest, r)
 		return
 	}
 
@@ -319,8 +326,8 @@ func (h *Handlers) HandleKillExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if id == "" {
-		writeError(w, "execution ID required", "INVALID_REQUEST", http.StatusBadRequest, r)
+	if id == "" || !validUUID.MatchString(id) {
+		writeError(w, "valid execution ID required", "INVALID_REQUEST", http.StatusBadRequest, r)
 		return
 	}
 

@@ -27,31 +27,38 @@ type Server struct {
 func NewServer(cfg *config.Config, backend sandbox.Backend, db *storage.DB, auditWriter *storage.AuditWriter, metrics *monitor.Metrics) *Server {
 	handlers := NewHandlers(backend, db, auditWriter, metrics)
 
-	mux := http.NewServeMux()
-
-	// Health and metrics — no auth required
 	s := &Server{
 		handlers:  handlers,
 		cfg:       cfg,
 		startTime: time.Now(),
 	}
 
+	if len(cfg.Security.AllowedKeys) == 0 {
+		log.Warn().Msg("no API keys configured — authentication is disabled, all requests will be accepted")
+	}
+
+	// Execution API — wrapped with auth
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("POST /execute", handlers.HandleExecute)
+	apiMux.HandleFunc("POST /execute/stream", handlers.HandleExecuteStream)
+	apiMux.HandleFunc("GET /executions", handlers.HandleListExecutions)
+	apiMux.HandleFunc("GET /executions/{id}", handlers.HandleGetExecution)
+	apiMux.HandleFunc("DELETE /executions/{id}", handlers.HandleKillExecution)
+
+	authedAPI := AuthMiddleware(cfg.Security.AllowedKeys)(apiMux)
+
+	// Top-level mux: health/metrics bypass auth, everything else goes through auth
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth(db))
 	mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
-
-	// Execution API
-	mux.HandleFunc("POST /execute", handlers.HandleExecute)
-	mux.HandleFunc("POST /execute/stream", handlers.HandleExecuteStream)
-	mux.HandleFunc("GET /executions", handlers.HandleListExecutions)
-	mux.HandleFunc("GET /executions/{id}", handlers.HandleGetExecution)
-	mux.HandleFunc("DELETE /executions/{id}", handlers.HandleKillExecution)
+	mux.Handle("/", authedAPI)
 
 	// Apply middleware chain (outermost first)
 	var handler http.Handler = mux
 	handler = MetricsMiddleware(metrics)(handler)
-	handler = AuthMiddleware(cfg.Security.AllowedKeys)(handler)
 	handler = RateLimitMiddleware(cfg.Security.RateLimitRPS, cfg.Security.RateLimitBurst)(handler)
 	handler = MaxBodyMiddleware(cfg.Server.MaxRequestBody)(handler)
+	handler = SecurityHeadersMiddleware(handler)
 	handler = LoggingMiddleware(handler)
 	handler = RequestIDMiddleware(handler)
 	handler = RecoveryMiddleware(handler)

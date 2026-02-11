@@ -1,0 +1,20 @@
+runtimes:
+  python:
+    image: "docker.io/library/python:3.12-slim"
+    command: ["python3", "-u", "-B"]
+    file_extension: ".py"
+    env:
+      - "PYTHONDONTWRITEBYTECODE=1"
+      - "PYTHONUNBUFFERED=1"
+
+  node:
+    image: "docker.io/library/node:20-slim"
+    command: ["node", "--max-old-space-size=256", "--disallow-code-generation-from-strings"]
+    file_extension: ".js"
+    env: []
+
+  bash:
+    image: "docker.io/library/alpine:3.19"
+    command: ["/bin/sh", "-e", "-u"]
+    file_extension: ".sh"
+    env: []

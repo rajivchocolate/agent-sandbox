@@ -1,0 +1,104 @@
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_AARCH64"],
+  "syscalls": [
+    {
+      "names": [
+        "read", "write", "readv", "writev", "pread64", "pwrite64",
+        "open", "openat", "close", "lseek",
+        "stat", "fstat", "lstat", "newfstatat",
+        "access", "faccessat", "faccessat2",
+        "dup", "dup2", "dup3", "fcntl",
+        "poll", "ppoll", "select", "pselect6",
+        "pipe", "pipe2",
+        "readlink", "readlinkat",
+        "getdents64"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "brk", "mmap", "munmap", "mprotect", "mremap", "madvise"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "execve", "execveat",
+        "exit", "exit_group",
+        "wait4", "waitid",
+        "clone", "clone3", "vfork",
+        "set_tid_address", "set_robust_list", "get_robust_list"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "futex", "gettid", "tgkill",
+        "rt_sigaction", "rt_sigprocmask", "rt_sigreturn",
+        "sigaltstack"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "clock_gettime", "clock_getres", "gettimeofday",
+        "nanosleep", "clock_nanosleep"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "getpid", "getppid", "getuid", "geteuid",
+        "getgid", "getegid", "uname", "getcwd"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "epoll_create1", "epoll_ctl", "epoll_wait", "epoll_pwait",
+        "eventfd2"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "getrandom", "arch_prctl", "prctl", "ioctl", "sysinfo",
+        "getrlimit", "prlimit64", "umask",
+        "chmod", "fchmod", "fchmodat",
+        "chdir", "fchdir",
+        "rename", "renameat", "renameat2",
+        "unlink", "unlinkat",
+        "mkdir", "mkdirat", "rmdir",
+        "symlink", "symlinkat", "link", "linkat",
+        "ftruncate", "fallocate",
+        "fsync", "fdatasync", "flock",
+        "statfs", "fstatfs", "statx",
+        "memfd_create", "copy_file_range"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "ptrace", "process_vm_readv", "process_vm_writev",
+        "keyctl", "add_key", "request_key",
+        "bpf", "perf_event_open", "userfaultfd",
+        "kexec_load", "kexec_file_load",
+        "finit_module", "init_module", "delete_module"
+      ],
+      "action": "SCMP_ACT_TRAP"
+    },
+    {
+      "names": [
+        "mount", "umount2", "pivot_root",
+        "reboot", "swapon", "swapoff",
+        "sethostname", "setdomainname",
+        "setns", "unshare", "acct",
+        "settimeofday", "adjtimex", "clock_adjtime",
+        "nfsservctl", "personality", "lookup_dcookie",
+        "ioperm", "iopl"
+      ],
+      "action": "SCMP_ACT_ERRNO"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+# Remove unnecessary packages to reduce attack surface
+RUN apt-get purge -y --auto-remove \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc /usr/share/man
+
+# Create non-root user
+RUN useradd -r -s /bin/false -u 65534 sandboxuser
+
+# Create workspace
+RUN mkdir -p /workspace /tmp && \
+    chown sandboxuser:sandboxuser /workspace /tmp
+
+USER sandboxuser
+WORKDIR /workspace
+
+# No CMD — the sandbox runner will set the command

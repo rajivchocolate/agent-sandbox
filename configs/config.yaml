@@ -1,0 +1,54 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 65s
+  shutdown_timeout: 30s
+  max_request_body_bytes: 1048576  # 1MB
+
+sandbox:
+  containerd_socket: "/run/containerd/containerd.sock"
+  namespace: "sandbox"
+  default_timeout: 10s
+  max_timeout: 60s
+  max_concurrent: 1000
+  backend: "auto"  # "auto" (tries containerd then docker), "containerd", or "docker"
+  default_limits:
+    cpu_shares: 512
+    memory_mb: 256
+    pids_limit: 50
+    disk_mb: 100
+
+database:
+  dsn: "postgres://sandbox:sandbox@localhost:5432/sandbox?sslmode=disable"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+metrics:
+  enabled: true
+  path: "/metrics"
+
+tracing:
+  enabled: false
+  endpoint: "http://localhost:4317"
+  sample_rate: 0.1
+
+security:
+  api_key_header: "X-API-Key"
+  allowed_keys: []  # Empty = no auth required
+  rate_limit_rps: 100
+  rate_limit_burst: 200
+  seccomp_profile: "configs/seccomp-default.json"
+
+pool:
+  enabled: true
+  min_idle: 2
+  max_idle: 10
+  refill_delay: 500ms
+  max_age: 5m
+
+tls:
+  enabled: false
+  cert_file: ""
+  key_file: ""

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"safe-agent-sandbox/internal/api"
 	"safe-agent-sandbox/internal/config"
 	"safe-agent-sandbox/internal/monitor"
+	authproxy "safe-agent-sandbox/internal/proxy"
 	"safe-agent-sandbox/internal/sandbox"
 	"safe-agent-sandbox/internal/storage"
 )
@@ -64,6 +67,35 @@ func main() {
 		// Continue startup so health/metrics endpoints work for debugging
 	}
 
+	// Start auth proxy if configured (token never enters containers).
+	var proxy *authproxy.AuthProxy
+	if cfg.AuthProxy.Port > 0 {
+		token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+		if token == "" {
+			token = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		if token == "" {
+			log.Warn().Msg("auth_proxy enabled but no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in env; proxy will forward without auth")
+		}
+
+		// Generate a per-startup shared secret. Containers present this as
+		// their x-api-key; the proxy validates it before forwarding with
+		// the real token. If it leaks from a container, it is useless
+		// against api.anthropic.com directly.
+		secretBytes := make([]byte, 32)
+		if _, err := rand.Read(secretBytes); err != nil {
+			log.Fatal().Err(err).Msg("failed to generate proxy secret")
+		}
+		proxySecret := hex.EncodeToString(secretBytes)
+		cfg.AuthProxy.Secret = proxySecret
+
+		proxy = authproxy.New(cfg.AuthProxy.Port, token, proxySecret)
+		if err := proxy.Start(); err != nil {
+			log.Fatal().Err(err).Int("port", cfg.AuthProxy.Port).Msg("failed to start auth proxy")
+		}
+		log.Info().Int("port", cfg.AuthProxy.Port).Msg("auth proxy listening")
+	}
+
 	// Initialize database (optional — runs without it for development)
 	var db *storage.DB
 	if cfg.Database.DSN != "" {
@@ -105,6 +137,12 @@ func main() {
 		if backend != nil {
 			if err := backend.Close(); err != nil {
 				log.Error().Err(err).Msg("backend close error")
+			}
+		}
+
+		if proxy != nil {
+			if err := proxy.Close(shutdownCtx); err != nil {
+				log.Error().Err(err).Msg("auth proxy shutdown error")
 			}
 		}
 

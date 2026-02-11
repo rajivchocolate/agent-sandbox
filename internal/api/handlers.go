@@ -194,6 +194,15 @@ func (h *Handlers) HandleExecuteStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	detections := h.detector.AnalyzeCode(req.Code)
+	for _, d := range detections {
+		h.metrics.RecordSecurityEvent(d.Pattern)
+		if d.Severity == monitor.SeverityCritical.String() {
+			writeError(w, "request blocked by security policy", "SECURITY_BLOCKED", http.StatusForbidden, r)
+			return
+		}
+	}
+
 	if h.backend == nil {
 		writeError(w, "sandbox backend unavailable", "RUNNER_UNAVAILABLE", http.StatusServiceUnavailable, r)
 		return

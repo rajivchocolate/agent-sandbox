@@ -83,5 +83,5 @@ func newDockerBackend(cfg *config.Config) (Backend, error) {
 		return nil, fmt.Errorf("docker daemon not reachable: %w", err)
 	}
 
-	return NewDockerRunner(cfg.Sandbox.MaxConcurrent, cfg.Sandbox.AllowedWorkdirRoots), nil
+	return NewDockerRunner(cfg.Sandbox.MaxConcurrent, cfg.Sandbox.AllowedWorkdirRoots, cfg.AuthProxy.Port, cfg.AuthProxy.Secret), nil
 }

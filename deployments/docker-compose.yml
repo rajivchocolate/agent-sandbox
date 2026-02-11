@@ -6,7 +6,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /run/containerd/containerd.sock:/run/containerd/containerd.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - ENV=production
       - CONFIG_PATH=/app/configs/config.yaml

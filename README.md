@@ -145,6 +145,25 @@ Auth tokens are passed via a mounted secret file, not environment variables. The
 
 The e2e tests include adversarial cases that verify the container blocks things like reading `/etc/shadow`, accessing SSH keys, writing to the rootfs, using `mount()`, `chroot()`, `setuid(0)`, and so on. These are deterministic container security tests, not "ask Claude to be bad" tests.
 
+### Auth proxy (token never enters the container)
+
+Even with the secret-file approach above, the entrypoint exports the token into the process environment, making it readable via `/proc/self/environ`. If you want the token to never enter the container at all, enable the auth proxy:
+
+```yaml
+# configs/config.yaml
+auth_proxy:
+  port: 8081  # 0 = disabled (default)
+```
+
+How it works:
+
+1. The server starts a lightweight HTTP reverse proxy on the configured port.
+2. The proxy forwards all requests to `https://api.anthropic.com`, injecting the `x-api-key` header from the server's environment (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`).
+3. Claude containers get `ANTHROPIC_BASE_URL=http://host.docker.internal:8081` instead of a token — no token file, no `ANTHROPIC_API_KEY` in the container, nothing to steal.
+4. `docker exec <container> env | grep -i key` returns nothing.
+
+When the proxy is disabled (`port: 0`, the default), the existing token-via-file behavior is used unchanged.
+
 ### With Postgres (optional)
 
 If you want the audit log and execution history endpoints, spin up a Postgres instance and point the config at it:

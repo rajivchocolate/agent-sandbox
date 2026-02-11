@@ -13,14 +13,22 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Sandbox  SandboxConfig  `yaml:"sandbox"`
-	Database DatabaseConfig `yaml:"database"`
-	Metrics  MetricsConfig  `yaml:"metrics"`
-	Tracing  TracingConfig  `yaml:"tracing"`
-	Security SecurityConfig `yaml:"security"`
-	Pool     PoolConfig     `yaml:"pool"`
-	TLS      TLSConfig      `yaml:"tls"`
+	Server    ServerConfig    `yaml:"server"`
+	Sandbox   SandboxConfig   `yaml:"sandbox"`
+	Database  DatabaseConfig  `yaml:"database"`
+	Metrics   MetricsConfig   `yaml:"metrics"`
+	Tracing   TracingConfig   `yaml:"tracing"`
+	Security  SecurityConfig  `yaml:"security"`
+	Pool      PoolConfig      `yaml:"pool"`
+	TLS       TLSConfig       `yaml:"tls"`
+	AuthProxy AuthProxyConfig `yaml:"auth_proxy"`
+}
+
+// AuthProxyConfig controls the host-side reverse proxy that injects API
+// tokens so they never enter containers.
+type AuthProxyConfig struct {
+	Port   int    `yaml:"port"`   // 0 = disabled (default), >0 = listen on this port
+	Secret string `yaml:"-"`      // Generated at runtime, not from config file
 }
 
 type ServerConfig struct {
@@ -187,6 +195,9 @@ func (c *Config) Validate() error {
 		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
 			return fmt.Errorf("tls.cert_file and tls.key_file are required when TLS is enabled")
 		}
+	}
+	if c.AuthProxy.Port < 0 || c.AuthProxy.Port > 65535 {
+		return fmt.Errorf("auth_proxy.port must be 0-65535, got %d", c.AuthProxy.Port)
 	}
 	for _, root := range c.Sandbox.AllowedWorkdirRoots {
 		if !filepath.IsAbs(root) {

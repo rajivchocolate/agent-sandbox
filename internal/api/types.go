@@ -51,9 +51,7 @@ type Permissions struct {
 
 // NetworkPermissions controls network access within the sandbox.
 type NetworkPermissions struct {
-	Enabled      bool     `json:"enabled"`
-	AllowedHosts []string `json:"allowed_hosts,omitempty"`
-	AllowedPorts []int    `json:"allowed_ports,omitempty"`
+	Enabled bool `json:"enabled"`
 }
 
 // FilesystemPermissions controls filesystem access.

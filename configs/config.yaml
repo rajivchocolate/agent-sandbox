@@ -52,3 +52,6 @@ tls:
   enabled: false
   cert_file: ""
   key_file: ""
+
+auth_proxy:
+  port: 0  # 0 = disabled, set to 8081 to enable

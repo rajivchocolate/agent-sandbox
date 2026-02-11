@@ -42,18 +42,20 @@ var sensitiveHomeDirs = []string{".ssh", ".aws", ".gnupg", ".claude"}
 
 // DockerRunner is the Docker-based sandbox backend (macOS, or Linux without containerd).
 type DockerRunner struct {
-	runtimes     *runtime.Registry
-	sem          chan struct{}
-	active       atomic.Int64
-	wg           sync.WaitGroup
-	mu           sync.Mutex
-	closed       bool
-	dockerHost   string   // resolved DOCKER_HOST (e.g. from Docker context)
-	allowedRoots []string // WorkDir must be under one of these
+	runtimes      *runtime.Registry
+	sem           chan struct{}
+	active        atomic.Int64
+	wg            sync.WaitGroup
+	mu            sync.Mutex
+	closed        bool
+	dockerHost    string   // resolved DOCKER_HOST (e.g. from Docker context)
+	allowedRoots  []string // WorkDir must be under one of these
+	proxyPort     int      // >0 means auth proxy is active; skip token-via-file
+	proxySecret   string   // shared secret containers present to the auth proxy
 	cancelCleanup context.CancelFunc
 }
 
-func NewDockerRunner(maxConcurrent int, allowedRoots []string) *DockerRunner {
+func NewDockerRunner(maxConcurrent int, allowedRoots []string, proxyPort int, proxySecret string) *DockerRunner {
 	if maxConcurrent < 1 {
 		maxConcurrent = 100
 	}
@@ -62,6 +64,8 @@ func NewDockerRunner(maxConcurrent int, allowedRoots []string) *DockerRunner {
 		sem:          make(chan struct{}, maxConcurrent),
 		dockerHost:   resolveDockerHost(),
 		allowedRoots: allowedRoots,
+		proxyPort:    proxyPort,
+		proxySecret:  proxySecret,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -200,8 +204,9 @@ func (d *DockerRunner) executeInternal(ctx context.Context, req ExecutionRequest
 	}
 
 	// Write auth token to a secret file (not env var) so it's not visible via docker inspect / /proc/*/environ.
+	// When the auth proxy is active (proxyPort > 0), the token never enters the container at all.
 	isClaude := rt.Name() == "claude"
-	if isClaude {
+	if isClaude && d.proxyPort == 0 {
 		for _, key := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
 			if v := os.Getenv(key); v != "" {
 				tokenPath := filepath.Join(hostDir, "auth_token")
@@ -363,12 +368,24 @@ func (d *DockerRunner) buildDockerArgs(
 			)
 		}
 
-		// Mount auth token as a secret file instead of passing as env var.
-		tokenPath := filepath.Join(hostDir, "auth_token")
-		if _, err := os.Stat(tokenPath); err == nil {
+		if d.proxyPort > 0 {
+			// Auth proxy mode: route API traffic through the host proxy.
+			// The container gets a proxy secret as its "API key" — the proxy
+			// validates it before forwarding with the real token. The secret
+			// is worthless against api.anthropic.com directly.
 			args = append(args,
-				"-v", fmt.Sprintf("%s:/run/secrets/auth_token:ro", tokenPath),
+				"--add-host", "host.docker.internal:host-gateway",
+				"-e", fmt.Sprintf("ANTHROPIC_BASE_URL=http://host.docker.internal:%d", d.proxyPort),
+				"-e", "ANTHROPIC_API_KEY="+d.proxySecret,
 			)
+		} else {
+			// Legacy mode: mount auth token as a secret file.
+			tokenPath := filepath.Join(hostDir, "auth_token")
+			if _, err := os.Stat(tokenPath); err == nil {
+				args = append(args,
+					"-v", fmt.Sprintf("%s:/run/secrets/auth_token:ro", tokenPath),
+				)
+			}
 		}
 	}
 

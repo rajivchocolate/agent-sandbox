@@ -98,6 +98,7 @@ func dangerousSyscalls(b *ProfileBuilder) *ProfileBuilder {
 			"bpf",
 			"perf_event_open",
 			"userfaultfd",
+			"memfd_create", // fileless execution: anonymous in-memory files executable via /proc/self/fd
 			"kexec_load", "kexec_file_load",
 			"finit_module", "init_module", "delete_module",
 		).

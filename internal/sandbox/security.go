@@ -25,6 +25,7 @@ func DefaultSecurityProfile() SecurityProfile {
 			{Type: specs.UTSNamespace},
 			{Type: specs.IPCNamespace},
 			{Type: specs.UserNamespace},
+			{Type: specs.CgroupNamespace},
 		},
 		MaskedPaths: []string{
 			"/proc/acpi",

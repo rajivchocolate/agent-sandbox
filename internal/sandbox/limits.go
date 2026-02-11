@@ -46,10 +46,17 @@ func ApplyResourceLimits(spec *specs.Spec, limits ResourceLimits) {
 		spec.Linux.Resources = &specs.LinuxResources{}
 	}
 
-	shares := safeUint64(limits.CPUShares)
+	// Use CFS quota for a hard CPU cap instead of shares (soft, best-effort).
+	// period=100ms, quota = (CPUShares/1024) * period.
+	period := uint64(100000) // 100ms in microseconds
+	quota := int64(float64(limits.CPUShares) / 1024.0 * float64(period))
+	if quota < 1000 {
+		quota = 1000 // minimum 1ms
+	}
 
 	spec.Linux.Resources.CPU = &specs.LinuxCPU{
-		Shares: &shares,
+		Period: &period,
+		Quota:  &quota,
 	}
 
 	memoryBytes := limits.MemoryMB * 1024 * 1024

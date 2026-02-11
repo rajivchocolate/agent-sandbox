@@ -52,6 +52,30 @@ func (b *ProfileBuilder) TrapSyscalls(names ...string) *ProfileBuilder {
 	return b
 }
 
+// SyscallArg constrains a single argument for a seccomp rule.
+type SyscallArg struct {
+	Index uint   // Argument index (0-5)
+	Value uint64 // Value to compare
+	Op    specs.LinuxSeccompOperator
+}
+
+func (b *ProfileBuilder) AllowSyscallWithArgs(name string, args []SyscallArg) *ProfileBuilder {
+	specArgs := make([]specs.LinuxSeccompArg, len(args))
+	for i, a := range args {
+		specArgs[i] = specs.LinuxSeccompArg{
+			Index:    a.Index,
+			Value:    a.Value,
+			Op:       a.Op,
+		}
+	}
+	b.profile.Syscalls = append(b.profile.Syscalls, specs.LinuxSyscall{
+		Names:  []string{name},
+		Action: specs.ActAllow,
+		Args:   specArgs,
+	})
+	return b
+}
+
 func (b *ProfileBuilder) WithArchitectures(archs ...specs.Arch) *ProfileBuilder {
 	b.profile.Architectures = archs
 	return b

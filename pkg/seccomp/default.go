@@ -1,6 +1,8 @@
 package seccomp
 
 import (
+	"encoding/json"
+
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -57,7 +59,6 @@ func baseSyscalls(b *ProfileBuilder) *ProfileBuilder {
 		AllowSyscalls(
 			"getrandom",
 			"arch_prctl",
-			"prctl",
 			"ioctl",
 			"sysinfo",
 			"getrlimit", "prlimit64",
@@ -76,9 +77,15 @@ func baseSyscalls(b *ProfileBuilder) *ProfileBuilder {
 			"flock",
 			"statfs", "fstatfs",
 			"statx",
-			"memfd_create",
 			"copy_file_range",
-		)
+		).
+		// prctl restricted to PR_SET_NAME (15) and PR_GET_NAME (16) only
+		AllowSyscallWithArgs("prctl", []SyscallArg{
+			{Index: 0, Value: 15, Op: specs.OpEqualTo}, // PR_SET_NAME
+		}).
+		AllowSyscallWithArgs("prctl", []SyscallArg{
+			{Index: 0, Value: 16, Op: specs.OpEqualTo}, // PR_GET_NAME
+		})
 }
 
 func dangerousSyscalls(b *ProfileBuilder) *ProfileBuilder {
@@ -116,6 +123,85 @@ func DefaultProfile() *specs.LinuxSeccomp {
 	b = baseSyscalls(b)
 	b = dangerousSyscalls(b)
 	return b.Build()
+}
+
+// dockerSeccompProfile mirrors the Docker daemon's seccomp profile JSON format.
+type dockerSeccompProfile struct {
+	DefaultAction string               `json:"defaultAction"`
+	Architectures []string             `json:"architectures"`
+	Syscalls      []dockerSeccompRule   `json:"syscalls"`
+}
+
+type dockerSeccompRule struct {
+	Names  []string              `json:"names"`
+	Action string                `json:"action"`
+	Args   []dockerSeccompArg    `json:"args,omitempty"`
+}
+
+type dockerSeccompArg struct {
+	Index    uint   `json:"index"`
+	Value    uint64 `json:"value"`
+	Op       string `json:"op"`
+}
+
+// DockerProfileJSON exports the default seccomp allowlist as Docker-format JSON
+// suitable for --security-opt seccomp=<path>.
+func DockerProfileJSON() ([]byte, error) {
+	return profileToDockerJSON(DefaultProfile())
+}
+
+// DockerNetworkProfileJSON exports the network-enabled seccomp allowlist as Docker-format JSON.
+func DockerNetworkProfileJSON() ([]byte, error) {
+	return profileToDockerJSON(NetworkAllowProfile())
+}
+
+func profileToDockerJSON(profile *specs.LinuxSeccomp) ([]byte, error) {
+	actionMap := map[specs.LinuxSeccompAction]string{
+		specs.ActAllow: "SCMP_ACT_ALLOW",
+		specs.ActErrno: "SCMP_ACT_ERRNO",
+		specs.ActTrap:  "SCMP_ACT_TRAP",
+		specs.ActLog:   "SCMP_ACT_LOG",
+		specs.ActKill:  "SCMP_ACT_KILL",
+	}
+	archMap := map[specs.Arch]string{
+		specs.ArchX86_64:  "SCMP_ARCH_X86_64",
+		specs.ArchAARCH64: "SCMP_ARCH_AARCH64",
+		specs.ArchX86:     "SCMP_ARCH_X86",
+		specs.ArchARM:     "SCMP_ARCH_ARM",
+	}
+	opMap := map[specs.LinuxSeccompOperator]string{
+		specs.OpEqualTo:      "SCMP_CMP_EQ",
+		specs.OpNotEqual:     "SCMP_CMP_NE",
+		specs.OpGreaterThan:  "SCMP_CMP_GT",
+		specs.OpGreaterEqual: "SCMP_CMP_GE",
+		specs.OpLessThan:     "SCMP_CMP_LT",
+		specs.OpLessEqual:    "SCMP_CMP_LE",
+		specs.OpMaskedEqual:  "SCMP_CMP_MASKED_EQ",
+	}
+
+	dp := dockerSeccompProfile{
+		DefaultAction: actionMap[profile.DefaultAction],
+	}
+	for _, a := range profile.Architectures {
+		if s, ok := archMap[a]; ok {
+			dp.Architectures = append(dp.Architectures, s)
+		}
+	}
+	for _, sc := range profile.Syscalls {
+		rule := dockerSeccompRule{
+			Names:  sc.Names,
+			Action: actionMap[sc.Action],
+		}
+		for _, arg := range sc.Args {
+			rule.Args = append(rule.Args, dockerSeccompArg{
+				Index: arg.Index,
+				Value: arg.Value,
+				Op:    opMap[arg.Op],
+			})
+		}
+		dp.Syscalls = append(dp.Syscalls, rule)
+	}
+	return json.Marshal(dp)
 }
 
 // NetworkAllowProfile adds socket/connect/bind to the default profile.

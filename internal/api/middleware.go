@@ -19,6 +19,7 @@ import (
 	"safe-agent-sandbox/internal/monitor"
 )
 
+// validRequestID allows alphanumeric + hyphens, max 64 chars. Rejects injection attempts.
 var validRequestID = regexp.MustCompile(`^[a-zA-Z0-9\-]{1,64}$`)
 
 type contextKey string
@@ -86,6 +87,9 @@ func (sr *statusRecorder) WriteHeader(code int) {
 	sr.ResponseWriter.WriteHeader(code)
 }
 
+// AuthMiddleware validates API keys from X-API-Key header or Bearer token.
+// Keys are compared in O(1) via a map. Empty keySet + allowUnauthenticated=true
+// lets all requests through (development mode).
 func AuthMiddleware(allowedKeys []string, allowUnauthenticated bool) func(http.Handler) http.Handler {
 	keySet := make(map[string]struct{}, len(allowedKeys))
 	for _, k := range allowedKeys {
@@ -129,6 +133,9 @@ func AuthMiddleware(allowedKeys []string, allowUnauthenticated bool) func(http.H
 
 const maxRateLimitVisitors = 10000
 
+// RateLimitMiddleware implements a per-IP token bucket rate limiter.
+// Stale entries are evicted every minute; the visitor map is capped at 10k entries
+// to prevent memory exhaustion from many unique IPs.
 func RateLimitMiddleware(rps float64, burst int) func(http.Handler) http.Handler {
 	type visitor struct {
 		tokens    float64
@@ -228,7 +235,7 @@ func ConcurrentClaudeMiddleware(maxConcurrent int) func(http.Handler) http.Handl
 
 			// Peek at the body to see if this is a claude request.
 			body, err := io.ReadAll(r.Body)
-			r.Body.Close()
+			r.Body.Close() // #nosec G104 -- http request body Close error is not actionable
 			if err != nil {
 				http.Error(w, `{"error":"failed to read body","code":"INVALID_REQUEST"}`, http.StatusBadRequest)
 				return
@@ -270,6 +277,7 @@ func MetricsMiddleware(metrics *monitor.Metrics) func(http.Handler) http.Handler
 	}
 }
 
+// RecoveryMiddleware catches panics in handlers and returns a 500 instead of crashing.
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -286,6 +294,7 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// MaxBodyMiddleware caps request body size to prevent memory exhaustion from large uploads.
 func MaxBodyMiddleware(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
